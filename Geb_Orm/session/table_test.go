@@ -10,14 +10,17 @@ type User struct {
 	Age  int
 }
 
+type Admin struct {
+	Name   string `geborm:"PROMARY KEY"`
+	Gender string
+}
+
 func TestSession_CreateTable(t *testing.T) {
 	s := NewSession()
 	assert.NotNil(t, s)
-	s.Model(&User{})
-	err := s.DropTable()
+	err := s.DropTable(&User{})
 	assert.Nil(t, err)
-	err = s.CreateTable()
+	err = s.CreateTable(&User{})
 	assert.Nil(t, err)
-	assert.True(t, s.HasTable())
-
+	assert.True(t, s.HasTable(&User{}))
 }
