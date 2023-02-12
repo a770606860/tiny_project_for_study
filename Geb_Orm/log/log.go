@@ -1,25 +1,60 @@
 package log
 
 import (
-	"io/ioutil"
 	"log"
 	"os"
-	"sync"
 )
 
 var (
 	errorLog = log.New(os.Stdout, "\033[31m[ERROR]\033[0m", log.LstdFlags|log.Lshortfile)
 	infoLog  = log.New(os.Stdout, "\033[34m[INRO ]\033[0m", log.LstdFlags|log.Lshortfile)
-	loggers  = []*log.Logger{errorLog, infoLog}
-	mu       sync.Mutex
 )
 
 var (
-	Error  = errorLog.Println
-	Errorf = errorLog.Printf
-	Info   = infoLog.Println
-	Infof  = infoLog.Printf
+	info_  = true
+	error_ = true
 )
+
+func Info(any ...interface{}) {
+	if !info_ {
+		return
+	}
+	infoLog.Println(any...)
+}
+func Infof(format string, any ...interface{}) {
+	if !info_ {
+		return
+	}
+	infoLog.Printf(format, any...)
+}
+func InfoSQL(desc string, vars []interface{}) {
+	if !info_ {
+		return
+	}
+	vars = quoteString(vars)
+	infoLog.Println(desc, vars)
+}
+func Error(any ...interface{}) {
+	if !error_ {
+		return
+	}
+	errorLog.Println(any...)
+}
+func Errorf(format string, any ...interface{}) {
+	if !error_ {
+		return
+	}
+	errorLog.Printf(format, any...)
+}
+
+func quoteString(vars []interface{}) []interface{} {
+	for i, v := range vars {
+		if v, ok := v.(string); ok {
+			vars[i] = "\"" + v + "\""
+		}
+	}
+	return vars
+}
 
 const (
 	InfoLevel = iota
@@ -28,18 +63,14 @@ const (
 )
 
 func SetLevel(level int) {
-	mu.Lock()
+	// default
 	if level < InfoLevel || level > Disabled {
 		level = ErrorLevel
 	}
-	for _, l := range loggers {
-		l.SetOutput(os.Stdout)
-	}
 	if ErrorLevel < level {
-		errorLog.SetOutput(ioutil.Discard)
+		error_ = false
 	}
 	if InfoLevel < level {
-		infoLog.SetOutput(ioutil.Discard)
+		info_ = false
 	}
-	mu.Unlock()
 }
