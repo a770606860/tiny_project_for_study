@@ -129,3 +129,68 @@ func TestSession_Count(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), c)
 }
+
+var bi, ai, bu, au, bq, aq, bd, ad int
+
+func (u *User) BeforeInsert(s *Session) {
+	bi++
+}
+func (u *User) AfterInsert(s *Session) {
+	ai++
+}
+func (u *User) BeforeUpdate(s *Session) {
+	bu++
+}
+func (u *User) AfterUpdate(s *Session) {
+	au++
+}
+func (u *User) BeforeDelete(s *Session) {
+	bd++
+}
+func (u *User) AfterDelete(s *Session) {
+	ad++
+}
+func (u *User) BeforeQuery(s *Session) {
+	bq++
+}
+func (u *User) AfterQuery(s *Session) {
+	aq++
+}
+
+func Test_Hook(t *testing.T) {
+	// test insert hook
+	s := insertSomeData(t)
+	assert.Equal(t, 2, bi)
+	assert.Equal(t, 2, ai)
+
+	// test update hook
+	c, err := s.Where("Name = ?", "xiaobai").Update(&User{}, M{"Age": 2})
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), c)
+	assert.Equal(t, 1, bu)
+	assert.Equal(t, 1, au)
+
+	// test query hook
+	u := User{}
+	err = s.Where("Name = ?", "xiaobai").FindOne(&u)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, bq)
+	assert.Equal(t, 1, aq)
+	assert.Equal(t, 2, u.Age)
+	a := Admin{}
+	err = s.Where("Name = ?", "wei").FindOne(&a)
+	assert.Equal(t, sql.ErrNoRows, err)
+	assert.Equal(t, 1, bq)
+	assert.Equal(t, 1, aq)
+	assert.Equal(t, "", a.Name)
+
+	// test delete hook
+	c, err = s.Where("name = ?", "xiaobai").Delete(&User{})
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), c)
+	c, err = s.Where("name = ?", "weiwei").Delete(&Admin{})
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), c)
+	assert.Equal(t, 1, bd)
+	assert.Equal(t, 1, ad)
+}
