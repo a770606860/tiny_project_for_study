@@ -55,7 +55,7 @@ loop:
 		default:
 		}
 		req, err := s.readRequest(c)
-		if err != nil && (req == nil || err == io.EOF) {
+		if err != nil && req == nil {
 			break
 		}
 		req.Err = err
