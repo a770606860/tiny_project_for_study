@@ -32,7 +32,7 @@ type GobCodec struct {
 	buf    *bufio.Writer
 	dec    *gob.Decoder
 	enc    *gob.Encoder
-	failed chan struct{}
+	failed chan struct{} // 数据发送队列
 }
 
 func (c *GobCodec) Close() error {

@@ -11,7 +11,8 @@ import (
 	"sync"
 )
 
-type Server struct{}
+type Server struct {
+}
 
 func NewServer() *Server {
 	return &Server{}
@@ -30,6 +31,11 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		return
 	}
 	log.Printf("rpc server: client approved")
+	if _, err := conn.Write([]byte("ok")); err != nil { // 发送确认信息到客户端失败
+		log.Printf("rpc server: connection err %s", err)
+		_ = conn.Close()
+	}
+
 	var c codec.Codec
 	switch opt.CodecType {
 	case codec.GobType:
@@ -107,10 +113,17 @@ func (s *Server) sendResponse(c codec.Codec, ch chan *codec.Response) {
 		err := c.Write(r)
 		if err != nil {
 			log.Printf("rpc server: send error Seq=%d %s", r.Seq, err)
-			close(c.Failed()) // 发送数据发生错误，表面通道损坏
+			close(c.Failed()) // 发送数据发生错误，表明conn损坏
+			break
 		} else {
 			log.Printf("rpc server: data sended Seq=%d", r.Seq)
 		}
+	}
+	drain(ch) // 清空通道，防止死锁
+}
+
+func drain(ch chan *codec.Response) {
+	for range ch {
 	}
 }
 

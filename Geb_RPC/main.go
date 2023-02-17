@@ -1,14 +1,11 @@
 package main
 
 import (
-	"encoding/json"
-	"gebrpc/codec"
-	"gebrpc/protocol"
+	"gebrpc/client"
 	"gebrpc/server"
 	"io"
 	"log"
 	"net"
-	"time"
 )
 
 func startServer(addr chan string) {
@@ -29,33 +26,27 @@ func startServer(addr chan string) {
 func main() {
 	addr := make(chan string)
 	go startServer(addr)
-	conn, err := net.Dial("tcp", <-addr)
+	c, err := client.NewClient(<-addr)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("New client error: ", err)
 	}
-	defer func() {
-		_ = conn.Close()
-	}()
-	_ = json.NewEncoder(conn).Encode(protocol.DefaultOption)
-	time.Sleep(200 * time.Millisecond) // 防止服务端json解码影响gob解码
-	cc := codec.NewGobCodec(conn)
-	err = cc.Write(&codec.Request{TargetMethod: "foo", Seq: 1, Argv: "xiaobai"})
-	if err != nil {
-		log.Println(err)
+	var r1, r2 string
+	call1 := c.Go("foo", "xiaobai", &r1)
+	call2 := c.Go("bar", "xiaoju", &r2)
+	print1 := func(call *client.Call) {
+		if call.Error != nil {
+			log.Printf("%s:%s:%d error %s", call.TargetMethod,
+				call.Args, call.Seq, call.Error)
+		} else {
+			log.Printf("%s returned", call.Reply.(string))
+		}
 	}
-	err = cc.Write(&codec.Request{TargetMethod: "bao", Seq: 2, Argv: "xiaonai"})
-	if err != nil {
-		log.Println(err)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-call1.Done:
+			print1(call1)
+		case <-call2.Done:
+			print1(call2)
+		}
 	}
-	var s1, s2 codec.Response
-	err = cc.Read(&s1)
-	if err != nil {
-		log.Println(err)
-	}
-	log.Println(s1.Replyv)
-	err = cc.Read(&s2)
-	if err != nil {
-		log.Println(err)
-	}
-	log.Println(s2.Replyv)
 }
