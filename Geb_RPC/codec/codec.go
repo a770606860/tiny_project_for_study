@@ -10,14 +10,13 @@ import (
 type Request struct {
 	TargetMethod string
 	Seq          uint64
-	Argv         interface{}
-	Err          error
+	Argv         []interface{} // 请求包含的参数
 }
 
 type Response struct {
-	Replyv interface{}
+	Replyv interface{} // 返回的结果
 	Seq    uint64
-	Err    error
+	Err    string // 服务端的错误，因为有些编码不支持error类型，所以这里使用string
 }
 
 type Codec interface {

@@ -14,10 +14,10 @@ import (
 
 // TODO 支持取消请求操作
 type Call struct {
-	Seq          uint64      // 序列号
-	TargetMethod string      // <service>:<methodName>
-	Args         interface{} // 参数
-	Reply        interface{} // 返回数据的指针
+	Seq          uint64        // 序列号
+	TargetMethod string        // <service>:<methodName>
+	Args         []interface{} // 参数
+	Reply        interface{}   // 返回数据的指针
 	Error        error
 	Done         chan *Call // 通知调用方调用完成，必须是缓存chan，以免阻塞client
 }
@@ -103,7 +103,9 @@ func (c *Client) receive() {
 		call := c.removeCall(resp.Seq)
 		// 确保call未失效
 		if call != nil {
-			call.Error = resp.Err
+			if resp.Err != "" {
+				call.Error = errors.New(resp.Err)
+			}
 			call.Reply = resp.Replyv
 			call.done()
 		}
@@ -133,20 +135,19 @@ func (c *Client) send(call *Call) {
 	}
 }
 
-func (c *Client) Go(targetMethod string, args, reply interface{}) *Call {
+func (c *Client) Go(targetMethod string, args ...interface{}) *Call {
 	call := &Call{
 		TargetMethod: targetMethod,
 		Args:         args,
-		Reply:        reply,
 		Done:         make(chan *Call, 10),
 	}
 	c.send(call)
 	return call
 }
 
-func (c *Client) Call(targetMethod string, args, reply interface{}) error {
-	call := <-c.Go(targetMethod, args, reply).Done
-	return call.Error
+func (c *Client) Call(targetMethod string, args ...interface{}) *Call {
+	call := <-c.Go(targetMethod, args...).Done
+	return call
 }
 
 func (c *Client) dail(addr string, option *protocol.Option) error {
@@ -164,7 +165,7 @@ func (c *Client) dail(addr string, option *protocol.Option) error {
 		return err
 	}
 	resp := make([]byte, 2)
-	conn.Read(resp)
+	_, err = conn.Read(resp)
 	if err != nil {
 		return err
 	}

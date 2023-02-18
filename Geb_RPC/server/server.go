@@ -2,20 +2,63 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"gebrpc/codec"
 	"gebrpc/protocol"
 	"io"
 	"log"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 )
 
 type Server struct {
+	services sync.Map
 }
 
 func NewServer() *Server {
 	return &Server{}
+}
+
+func (s *Server) Register(rcvr interface{}) error {
+	se := newService(rcvr)
+	if _, dup := s.services.LoadOrStore(se.name, se); dup {
+		return errors.New("rpc server: service already defined: " + se.name)
+	}
+	return nil
+}
+
+func (s *Server) service(req *codec.Request, resp *codec.Response) (err error) {
+	name := strings.Split(req.TargetMethod, ":")
+	defer func() {
+		if err != nil {
+			resp.Err = fmt.Errorf("service/method not found").Error()
+		}
+	}()
+	if len(name) != 2 || len(name[0]) == 0 || len(name[1]) == 0 {
+		err = fmt.Errorf("rpc server: method format ill-formed: %s, except:<service>:<name>", req.TargetMethod)
+		return err
+	}
+	svci, ok := s.services.Load(name[0])
+	if !ok {
+		err = fmt.Errorf("rpc server: service %s not avialible", name[0])
+		return err
+	}
+	svc := svci.(*service)
+	mtype := svc.methods[name[1]]
+	if mtype == nil {
+		err = fmt.Errorf("rpc server: service %s has no method %s", name[0], name[1])
+		return err
+	}
+
+	var argvs []reflect.Value
+	for _, arg := range req.Argv {
+		argvs = append(argvs, reflect.ValueOf(arg))
+	}
+	resp.Replyv = svc.call(mtype, argvs...)
+	return nil
 }
 
 func (s *Server) ServeConn(conn io.ReadWriteCloser) {
@@ -64,10 +107,9 @@ loop:
 		if err != nil && req == nil {
 			break
 		}
-		req.Err = err
 		wg.Add(1)
 		go func() {
-			s.handleRequest(req, resultCh)
+			s.handleRequest(req, resultCh, err)
 			wg.Done()
 		}()
 	}
@@ -88,20 +130,19 @@ func (s *Server) readRequest(c codec.Codec) (*codec.Request, error) {
 	return &r, err
 }
 
-func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response) {
+func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response, err error) {
 	var resp codec.Response
 	resp.Seq = req.Seq
-	if req.Err != nil {
-		resp.Err = req.Err
+	if err != nil {
+		resp.Err = err.Error()
+		return
 	}
-	// 调用对应的处理函数进行处理，这里直接返回请求编号
-	{
-		// 暂时直接将参数和函数名返回
-		fname := req.TargetMethod
-		arg := readAsString(req.Argv)
-		resp.Replyv = fname + ":" + arg
-		ch <- &resp
+	err = s.service(req, &resp)
+	if err != nil {
+		log.Println(err)
 	}
+	ch <- &resp
+
 }
 
 func readAsString(argv interface{}) string {
