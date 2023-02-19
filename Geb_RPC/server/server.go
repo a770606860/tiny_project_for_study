@@ -54,10 +54,26 @@ func (s *Server) service(req *codec.Request, resp *codec.Response) (err error) {
 	}
 
 	var argvs []reflect.Value
-	for _, arg := range req.Argv {
-		argvs = append(argvs, reflect.ValueOf(arg))
+
+	for i, arg := range req.Argv {
+		if t := mtype.argType[i+1]; t.Kind() == reflect.Ptr &&
+			reflect.TypeOf(arg).Kind() != reflect.Ptr {
+			p := reflect.New(t.Elem())
+			p.Elem().Set(reflect.ValueOf(arg))
+			argvs = append(argvs, p)
+		} else {
+			argvs = append(argvs, reflect.ValueOf(arg))
+		}
 	}
-	resp.Replyv = svc.call(mtype, argvs...)
+	if re := svc.call(mtype, argvs...); re != nil {
+		replyv := reflect.ValueOf(re)
+		if replyv.Kind() == reflect.Ptr {
+			resp.Replyv = replyv.Elem().Interface()
+		} else {
+			resp.Replyv = replyv.Interface()
+		}
+	}
+
 	return nil
 }
 
@@ -120,8 +136,11 @@ loop:
 
 func (s *Server) readRequest(c codec.Codec) (*codec.Request, error) {
 	var r codec.Request
-	err := c.Read(&r)
-
+	// 有些编解码器编码后不带类型信息例如JSON，而有些则携带比如Gob。
+	// 这些差异由具体的codec的实现负责处理，例如：
+	// Gob编解器码需要注册类型；
+	// Json解码器需要将Request拆开为head, body进行发送，从head获取足够的信息后再利用这些信息解码body；
+	err := c.ReadRequest(&r)
 	if err == nil {
 		log.Printf("rpc server: data recived Seq=%d", r.Seq)
 	} else if err != io.EOF {
@@ -145,13 +164,9 @@ func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response, err 
 
 }
 
-func readAsString(argv interface{}) string {
-	return reflect.ValueOf(argv).String()
-}
-
 func (s *Server) sendResponse(c codec.Codec, ch chan *codec.Response) {
 	for r := range ch {
-		err := c.Write(r)
+		err := c.WriteResponse(r)
 		if err != nil {
 			log.Printf("rpc server: send error Seq=%d %s", r.Seq, err)
 			close(c.Failed()) // 发送数据发生错误，表明conn损坏

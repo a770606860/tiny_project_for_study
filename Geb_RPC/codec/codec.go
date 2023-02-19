@@ -5,6 +5,8 @@ import (
 	"encoding/gob"
 	"io"
 	"log"
+	"reflect"
+	"sync"
 )
 
 type Request struct {
@@ -16,13 +18,15 @@ type Request struct {
 type Response struct {
 	Replyv interface{} // 返回的结果
 	Seq    uint64
-	Err    string // 服务端的错误，因为有些编码不支持error类型，所以这里使用string
+	Err    string // 服务端的错误
 }
 
 type Codec interface {
 	io.Closer
-	Read(any interface{}) error
-	Write(any interface{}) error
+	ReadResponse(response *Response) error
+	ReadRequest(request *Request) error
+	WriteRequest(request *Request) error
+	WriteResponse(response *Response) error
 	Failed() chan struct{}
 }
 
@@ -32,6 +36,7 @@ type GobCodec struct {
 	dec    *gob.Decoder
 	enc    *gob.Encoder
 	failed chan struct{} // 数据发送队列
+	types  sync.Map
 }
 
 func (c *GobCodec) Close() error {
@@ -43,28 +48,64 @@ func (c *GobCodec) Failed() chan struct{} {
 	return c.failed
 }
 
-func (c *GobCodec) Read(any interface{}) error {
-	return c.dec.Decode(any)
+func (c *GobCodec) ReadResponse(response *Response) error {
+	c.register(response)
+	return c.dec.Decode(response)
 }
 
-func (c *GobCodec) Write(any interface{}) (err error) {
+func (c *GobCodec) ReadRequest(request *Request) error {
+	c.register(request)
+	return c.dec.Decode(request)
+}
+
+func (c *GobCodec) WriteRequest(request *Request) (err error) {
 	defer func() {
 		e := c.buf.Flush()
 		if e != nil {
 			log.Printf("rpc codec: buf flush err %s", e)
 		}
 	}()
-	err = c.enc.Encode(any)
+	c.register(request)
+	err = c.enc.Encode(request)
 	return
 }
 
-func (c *GobCodec) WriteResponse(resp *Response) (err error) {
-	err = c.write(resp)
-	if err != nil {
-		log.Printf("rpc codec: gob error encoding response[Seq:err]:[%d,%s]",
-			resp.Seq, err)
+// Gob编解码器需要注册类型信息，否则编解码会出错
+func (c *GobCodec) register(any interface{}) {
+	if response, ok := any.(*Response); ok {
+		if response.Replyv == nil {
+			return
+		}
+		pkg := reflect.TypeOf(response.Replyv).PkgPath()
+		if pkg == "" {
+			return
+		}
+		name := pkg + "." + reflect.TypeOf(response.Replyv).Name()
+		if _, loaded := c.types.LoadOrStore(name, nil); !loaded {
+			gob.Register(response.Replyv)
+		}
+	} else {
+		request := any.(*Request)
+		for _, i := range request.Argv {
+			pkg := reflect.TypeOf(i).PkgPath()
+			name := pkg + "." + reflect.TypeOf(i).Name()
+			if _, ok := c.types.LoadOrStore(name, nil); !ok {
+				gob.Register(i)
+			}
+		}
 	}
-	return err
+}
+
+func (c *GobCodec) WriteResponse(response *Response) (err error) {
+	defer func() {
+		e := c.buf.Flush()
+		if e != nil {
+			log.Printf("rpc codec: buf flush err %s", e)
+		}
+	}()
+	c.register(response)
+	err = c.enc.Encode(response)
+	return
 }
 
 func (c *GobCodec) write(any interface{}) (err error) {

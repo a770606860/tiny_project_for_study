@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"reflect"
 	"sync"
 )
 
@@ -82,22 +83,30 @@ func (c *Client) removeCall(seq uint64) *Call {
 
 func (c *Client) terminateCalls(err error) {
 	// 发送锁是为了保持语义的完整
+	// TODO： defer的执行顺序未确认，理论上先解锁mu再sending
 	c.sending.Lock()
+	defer c.sending.Unlock()
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.shutdown == true {
+		return
+	}
 	c.shutdown = true
 	for _, call := range c.pending {
 		call.Error = err
 		call.done()
 	}
-	c.mu.Unlock()
-	c.sending.Unlock()
 }
 
 func (c *Client) receive() {
 	var err error
 	for err == nil {
 		var resp codec.Response
-		if err = c.cc.Read(&resp); err != nil {
+		// 有些编解码器编码后不带类型信息例如JSON，而有些则携带比如Gob。
+		// 这些差异由具体的codec的实现负责处理，例如：
+		// Gob编解器码需要注册类型；
+		// Json解码器需要将Request拆开为head, body进行发送，从head获取足够的信息后再利用这些信息解码body；
+		if err = c.cc.ReadResponse(&resp); err != nil {
 			break
 		}
 		call := c.removeCall(resp.Seq)
@@ -123,9 +132,20 @@ func (c *Client) send(call *Call) {
 		call.done()
 		return
 	}
+	// 传递之前将参数解引用
+	var argd []interface{}
+	for _, arg := range call.Args {
+		var argv interface{}
+		if reflect.TypeOf(arg).Kind() == reflect.Ptr {
+			argv = reflect.ValueOf(arg).Elem().Interface()
+		} else {
+			argv = arg
+		}
+		argd = append(argd, argv)
+	}
 
-	req := codec.Request{Seq: seq, Argv: call.Args, TargetMethod: call.TargetMethod}
-	if err := c.cc.Write(&req); err != nil {
+	req := codec.Request{Seq: seq, Argv: argd, TargetMethod: call.TargetMethod}
+	if err := c.cc.WriteRequest(&req); err != nil {
 		// 发送失败，直接返回call
 		call := c.removeCall(seq)
 		if call != nil {
@@ -135,18 +155,19 @@ func (c *Client) send(call *Call) {
 	}
 }
 
-func (c *Client) Go(targetMethod string, args ...interface{}) *Call {
+func (c *Client) Go(targetMethod string, replyMark interface{}, args ...interface{}) *Call {
 	call := &Call{
 		TargetMethod: targetMethod,
 		Args:         args,
 		Done:         make(chan *Call, 10),
+		Reply:        replyMark,
 	}
 	c.send(call)
 	return call
 }
 
-func (c *Client) Call(targetMethod string, args ...interface{}) *Call {
-	call := <-c.Go(targetMethod, args...).Done
+func (c *Client) Call(targetMethod string, replyMark interface{}, args ...interface{}) *Call {
+	call := <-c.Go(targetMethod, replyMark, args...).Done
 	return call
 }
 

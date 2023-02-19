@@ -1,7 +1,23 @@
+客户端可以阻塞或者非阻塞的调用远程方法：
+result := c.Go("服务名：方法名", 返回类型零值或nil, 参数或指向参数的指针...)  // 不会阻塞
+result := c.Call("服务名：方法名", 返回类型零值或nil，参数或指向参数的指针...)// 阻塞直到调用返回
+当调用上述方法传入返回类型nil时表明无返回值
+result中包含调用结果，其为一个指向Call结构体的指针，可以获取信息如下
+<-result.Done   // 等待远程调用完成
+result.Err      // 远程调用错误信息，通常是连接或者服务不存在等错误
+result.Reply    // 返回值
+一个例子：
+call3 := c.Call("StudentService:SetName", nil, "weiwei")
+call3 = c.Call("StudentService:SetParents", nil, &Parents{"a", "b"})
+call3 = c.Call("StudentService:GetName", "")
+assert.Equal("weiwei", call3.Reply.(string))
+
+
 被代理的方法必须满足如下条件：
-1，无返回值，或者只有一个返回值且必须为基本类型，结构体，切片或map。这么规定是为了调用方接口清晰
+1，不多于一个返回值，最多允许一个返回值是为了调用接口更简洁。
 2，参数和返回类型必须是导出类型或者基本类型
-3，方法本身必须是导出的
+3，服务对象和对应方法必须是导出的
+
 
 遇到的问题：
 1，server端协商阶段的json解码器读取数据破坏了rpc阶段的gob解码器的数据流

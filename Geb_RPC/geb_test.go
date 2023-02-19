@@ -1,4 +1,4 @@
-package main
+package gebrpc
 
 import (
 	"gebrpc/client"
@@ -13,8 +13,13 @@ import (
 var serv *server.Server
 
 type StudentService struct {
-	name string
-	age  int
+	name     string
+	age      int
+	p        Parents
+	siblings []string
+}
+type Parents struct {
+	Mother, Father string
 }
 
 func (s *StudentService) SetName(name string) {
@@ -22,6 +27,15 @@ func (s *StudentService) SetName(name string) {
 }
 func (s *StudentService) GetName() string {
 	return s.name
+}
+func (s *StudentService) SetParents(p *Parents) {
+	s.p = *p
+}
+func (s *StudentService) SetParents2(p Parents) {
+	s.p = p
+}
+func (s *StudentService) GetParents() *Parents {
+	return &s.p
 }
 
 func startServer(addr chan string) {
@@ -57,9 +71,14 @@ func Test_Main(t *testing.T) {
 	// 注册服务
 	err = serv.Register(&StudentService{})
 	assert.Nil(t, err)
-	call3 := c.Call("StudentService:SetName", "weiwei")
+	call3 := c.Call("StudentService:SetName", nil, "weiwei")
 	assert.Nil(t, call3.Error)
-	call3 = c.Call("StudentService:GetName")
+	call3 = c.Call("StudentService:GetName", nil)
 	assert.Nil(t, call3.Error)
 	assert.Equal(t, "weiwei", call3.Reply.(string))
+	call3 = c.Call("StudentService:SetParents", nil, &Parents{"a", "b"})
+	assert.Nil(t, call3.Error)
+	call3 = c.Call("StudentService:GetParents", Parents{})
+	assert.Nil(t, call3.Error)
+	//assert.Equal(t, Parents{"a", "b"}, call3.Reply.(Parents))
 }
