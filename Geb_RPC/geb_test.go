@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"testing"
+	"time"
 )
 
 var serv *server.Server
@@ -39,6 +40,7 @@ func (s *StudentService) GetParents() *Parents {
 }
 
 func startServer(addr chan string) {
+
 	l, err := net.Listen("tcp", ":0")
 	var conn io.ReadWriteCloser
 	if err != nil {
@@ -46,19 +48,21 @@ func startServer(addr chan string) {
 	}
 	log.Println("start rpc server on ", l.Addr().String())
 	addr <- l.Addr().String()
-	conn, err = l.Accept()
-	if err != nil {
-		log.Fatal(err)
-	}
 	serv = server.NewServer()
-	serv.ServeConn(conn)
+	for {
+		conn, err = l.Accept()
+		if err != nil {
+			log.Fatal(err)
+		}
+		serv.ServeConn(conn)
+	}
 }
 
 func Test_Main(t *testing.T) {
 	// 启动客户端和服务器
 	addr := make(chan string)
 	go startServer(addr)
-	c, err := client.NewClient(<-addr)
+	c, err := client.NewClient(<-addr, time.Second)
 	if err != nil {
 		log.Fatal("New client error: ", err)
 	}
@@ -82,3 +86,53 @@ func Test_Main(t *testing.T) {
 	assert.Nil(t, call3.Error)
 	//assert.Equal(t, Parents{"a", "b"}, call3.Reply.(Parents))
 }
+
+func Test_Timeout(t *testing.T) {
+	addr := make(chan string)
+	go startServer(addr)
+	ad := <-addr
+	c, err := client.NewClient(ad, 400*time.Millisecond)
+	assert.Nil(t, err)
+	if err != nil {
+		log.Println(err)
+	} else {
+		c.Close()
+	}
+	c, err = client.NewClient(ad, time.Microsecond)
+	assert.Equal(t, client.TimeOutError, err)
+
+	c, err = client.NewClient(ad, 1*time.Second)
+	if err != nil {
+		log.Println(err)
+	}
+	assert.Nil(t, err)
+	if c != nil {
+		err = c.Close()
+		assert.Nil(t, err)
+	}
+
+}
+
+//// 修改代码后单独测试该函数
+//func Test_timeout2(t *testing.T) {
+//	// 启动客户端和服务器
+//	addr := make(chan string)
+//	go startServer(addr)
+//	ad := <-addr
+//	// 下面的测试需要在client.dail函数中添加sleep代码以测试协商过程过长是否能够即使返回
+//	// // 		err = json.NewEncoder(conn).Encode(option)
+//	//		if err != nil {
+//	//			return
+//	//		}
+//	//		time.Sleep(500 * time.Millisecond)
+//	//		resp := make([]byte, 2)
+//	// //
+//	_, err := client.NewClient(ad, 400*time.Millisecond)
+//	if err != nil {
+//		log.Println(err.Error())
+//	}
+//	assert.Equal(t, client.TimeOutError, err)
+//
+//	_, err = client.NewClient(ad, 800*time.Millisecond)
+//	assert.Nil(t, err)
+//}

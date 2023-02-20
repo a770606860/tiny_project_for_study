@@ -11,6 +11,7 @@ import (
 	"net"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // TODO 支持取消请求操作
@@ -22,6 +23,8 @@ type Call struct {
 	Error        error
 	Done         chan *Call // 通知调用方调用完成，必须是缓存chan，以免阻塞client
 }
+
+var TimeOutError = errors.New("connect or negotiate server time out")
 
 func (call *Call) done() {
 	select {
@@ -171,37 +174,67 @@ func (c *Client) Call(targetMethod string, replyMark interface{}, args ...interf
 	return call
 }
 
-func (c *Client) dail(addr string, option *protocol.Option) error {
-	conn, err := net.Dial("tcp", addr)
-	defer func() {
-		if err != nil {
-			_ = conn.Close()
+func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Option) error {
+	finish := make(chan error, 1)
+	connCh := make(chan net.Conn, 1)
+	go func() {
+		conn, err := net.DialTimeout("tcp", addr, timeOut)
+		connCh <- conn
+		if err == nil {
+			log.Printf("rpc client: connection established, negociating")
 		}
+		defer func() {
+			finish <- err
+		}()
+		if err != nil {
+			return
+		}
+		err = json.NewEncoder(conn).Encode(option)
+		log.Println("rpc client: option sent")
+		if err != nil {
+			log.Printf("rpc client: %v", err)
+			return
+		}
+		resp := make([]byte, 2)
+		_, err = conn.Read(resp)
+		if err != nil {
+			log.Printf("rpc client: %v", err)
+			return
+		}
+		if string(resp) != "ok" {
+			err = fmt.Errorf("server refused %s", resp)
+			return
+		}
+		cc := codec.NewGobCodec(conn)
+		c.cc = cc
+		return
 	}()
-	if err != nil {
+	select {
+	case <-time.After(timeOut):
+		conn := <-connCh
+		if conn != nil {
+			closeCloseable(conn)
+		}
+		return TimeOutError
+	case err := <-finish:
+		if c.cc != nil && err != nil {
+			closeCloseable(c.cc)
+		}
 		return err
 	}
-	err = json.NewEncoder(conn).Encode(option)
-	if err != nil {
-		return err
-	}
-	resp := make([]byte, 2)
-	_, err = conn.Read(resp)
-	if err != nil {
-		return err
-	}
-	if string(resp) != "ok" {
-		return fmt.Errorf("rpc client: server refused %s", resp)
-	}
-	cc := codec.NewGobCodec(conn)
-	c.cc = cc
-	return nil
 }
 
-func NewClient(addr string, option ...*protocol.Option) (*Client, error) {
+func closeCloseable(closeable io.Closer) {
+	err := closeable.Close()
+	if err != nil {
+		log.Printf("rpc client: close error %v", err)
+	}
+}
+
+func NewClient(addr string, timeOut time.Duration, option ...*protocol.Option) (*Client, error) {
 	c := &Client{pending: make(map[uint64]*Call)}
 	op := parseOption(option...)
-	if err := c.dail(addr, op); err != nil {
+	if err := c.dail(addr, timeOut, op); err != nil {
 		return nil, err
 	}
 	go c.receive()

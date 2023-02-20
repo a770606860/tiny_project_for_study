@@ -28,6 +28,7 @@ type Codec interface {
 	WriteRequest(request *Request) error
 	WriteResponse(response *Response) error
 	Failed() chan struct{}
+	GetConn() io.ReadWriteCloser
 }
 
 type GobCodec struct {
@@ -46,6 +47,10 @@ func (c *GobCodec) Close() error {
 
 func (c *GobCodec) Failed() chan struct{} {
 	return c.failed
+}
+
+func (c *GobCodec) GetConn() io.ReadWriteCloser {
+	return c.conn
 }
 
 func (c *GobCodec) ReadResponse(response *Response) error {

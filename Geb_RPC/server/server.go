@@ -25,7 +25,7 @@ func NewServer() *Server {
 func (s *Server) Register(rcvr interface{}) error {
 	se := newService(rcvr)
 	if _, dup := s.services.LoadOrStore(se.name, se); dup {
-		return errors.New("rpc server: service already defined: " + se.name)
+		return errors.New("service already defined: " + se.name)
 	}
 	return nil
 }
@@ -38,18 +38,18 @@ func (s *Server) service(req *codec.Request, resp *codec.Response) (err error) {
 		}
 	}()
 	if len(name) != 2 || len(name[0]) == 0 || len(name[1]) == 0 {
-		err = fmt.Errorf("rpc server: method format ill-formed: %s, except:<service>:<name>", req.TargetMethod)
+		err = fmt.Errorf("method format ill-formed: %s, except:<service>:<name>", req.TargetMethod)
 		return err
 	}
 	svci, ok := s.services.Load(name[0])
 	if !ok {
-		err = fmt.Errorf("rpc server: service %s not avialible", name[0])
+		err = fmt.Errorf("service %s not avialible", name[0])
 		return err
 	}
 	svc := svci.(*service)
 	mtype := svc.methods[name[1]]
 	if mtype == nil {
-		err = fmt.Errorf("rpc server: service %s has no method %s", name[0], name[1])
+		err = fmt.Errorf("service %s has no method %s", name[0], name[1])
 		return err
 	}
 
@@ -80,19 +80,20 @@ func (s *Server) service(req *codec.Request, resp *codec.Response) (err error) {
 func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 	var opt protocol.Option
 	if err := json.NewDecoder(conn).Decode(&opt); err != nil {
-		log.Println("rpc server: options error", err)
-		_ = conn.Close()
+		log.Printf("rpc server: options error %v", err)
+		closeCloseable(conn)
 		return
 	}
 	if opt.MagicNumber != protocol.MagicNumber {
 		log.Printf("rpc server: invalid magic number %x", opt.MagicNumber)
-		_ = conn.Close()
+		closeCloseable(conn)
 		return
 	}
 	log.Printf("rpc server: client approved")
 	if _, err := conn.Write([]byte("ok")); err != nil { // 发送确认信息到客户端失败
 		log.Printf("rpc server: connection err %s", err)
-		_ = conn.Close()
+		closeCloseable(conn)
+		return
 	}
 
 	var c codec.Codec
@@ -101,7 +102,7 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		c = codec.NewGobCodec(conn)
 	default:
 		log.Println("rpc server: unsupported codec type")
-		_ = conn.Close()
+		closeCloseable(conn)
 		return
 	}
 	s.serveCodec(c)
@@ -120,8 +121,8 @@ loop:
 		default:
 		}
 		req, err := s.readRequest(c)
-		if err != nil && req == nil {
-			break
+		if err != nil {
+			break loop
 		}
 		wg.Add(1)
 		go func() {
@@ -131,7 +132,10 @@ loop:
 	}
 	wg.Wait()
 	close(resultCh)
-	_ = c.Close()
+	if cc, ok := c.GetConn().(net.Conn); ok {
+		log.Printf("rpc server: close connection [%s:%s]", cc.RemoteAddr(), cc.LocalAddr())
+	}
+	closeCloseable(c)
 }
 
 func (s *Server) readRequest(c codec.Codec) (*codec.Request, error) {
@@ -158,7 +162,7 @@ func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response, err 
 	}
 	err = s.service(req, &resp)
 	if err != nil {
-		log.Println(err)
+		log.Printf("rpc server: error %v", err)
 	}
 	ch <- &resp
 
@@ -191,5 +195,11 @@ func (s *Server) Accept(lis net.Listener) {
 			return // 直接关闭服务器
 		}
 		go s.ServeConn(conn)
+	}
+}
+
+func closeCloseable(closeable io.Closer) {
+	if err := closeable.Close(); err != nil {
+		log.Printf("rpc server: close error %v", err)
 	}
 }

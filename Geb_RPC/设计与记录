@@ -24,6 +24,10 @@ assert.Equal("weiwei", call3.Reply.(string))
 // Gob传输器会注册类型信息；
 // Json传输器会将Request拆开为head, body进行发送，接收方会从head获取足够的信息后再利用这些信息解码body；
 
+支持的功能：
+1，超时处理
+a，客户端发起连接并协商时如果超时则断开并释放连接
+
 
 遇到的问题：
 1，server端协商阶段的json解码器读取数据破坏了rpc阶段的gob解码器的数据流
