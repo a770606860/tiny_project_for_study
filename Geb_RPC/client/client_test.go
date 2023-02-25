@@ -1,7 +1,6 @@
-package gebrpc
+package client
 
 import (
-	"gebrpc/client"
 	"gebrpc/server"
 	"github.com/stretchr/testify/assert"
 	"io"
@@ -62,7 +61,7 @@ func Test_Main(t *testing.T) {
 	// 启动客户端和服务器
 	addr := make(chan string)
 	go startServer(addr)
-	c, err := client.NewClient(<-addr, time.Second)
+	c, err := NewClient(<-addr, time.Second)
 	if err != nil {
 		log.Fatal("New client error: ", err)
 	}
@@ -93,17 +92,17 @@ func Test_Timeout(t *testing.T) {
 	addr := make(chan string)
 	go startServer(addr)
 	ad := <-addr
-	c, err := client.NewClient(ad, 400*time.Millisecond)
+	c, err := NewClient(ad, 400*time.Millisecond)
 	assert.Nil(t, err)
 	if err != nil {
 		log.Println(err)
 	} else {
 		c.Close()
 	}
-	c, err = client.NewClient(ad, time.Microsecond)
-	assert.Equal(t, client.ErrTimeOut, err)
+	c, err = NewClient(ad, time.Microsecond)
+	assert.Equal(t, ErrTimeOut, err)
 
-	c, err = client.NewClient(ad, 1*time.Second)
+	c, err = NewClient(ad, 1*time.Second)
 	if err != nil {
 		log.Println(err)
 	}

@@ -12,7 +12,10 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
+
+var ErrServiceTimeOut = errors.New("service time out")
 
 type Server struct {
 	services sync.Map
@@ -153,6 +156,7 @@ func (s *Server) readRequest(c codec.Codec) (*codec.Request, error) {
 	return &r, err
 }
 
+// 超时处理，每个方法执行时间不得超过700ms，如果超过，则返回处理超时错误
 func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response, err error) {
 	var resp codec.Response
 	resp.Seq = req.Seq
@@ -160,12 +164,26 @@ func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response, err 
 		resp.Err = err.Error()
 		return
 	}
-	err = s.service(req, &resp)
+
+	finished := make(chan struct{})
+	go func() {
+		err = s.service(req, &resp)
+		close(finished)
+	}()
+
+	select {
+	case <-time.After(700 * time.Millisecond):
+		err = ErrServiceTimeOut
+		log.Printf("rpc server: %s timeout, please check", req.TargetMethod)
+	case <-finished:
+		if err != nil {
+			log.Printf("rpc server: error %v", err)
+		}
+	}
 	if err != nil {
-		log.Printf("rpc server: error %v", err)
+		resp.Err = err.Error()
 	}
 	ch <- &resp
-
 }
 
 func (s *Server) sendResponse(c codec.Codec, ch chan *codec.Response) {

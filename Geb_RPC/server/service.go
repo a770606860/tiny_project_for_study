@@ -7,6 +7,7 @@ import (
 	"sync"
 )
 
+// TODO：后续可以考虑在方法中定制化超时限制，当前固定为700ms
 type methodType struct {
 	method    reflect.Method
 	argType   []reflect.Type
