@@ -1,16 +1,27 @@
 客户端可以阻塞或者非阻塞的调用远程方法：
-result := c.Go("服务名：方法名", 返回类型零值或nil, 参数或指向参数的指针...)  // 不会阻塞
-result := c.Call("服务名：方法名", 返回类型零值或nil，参数或指向参数的指针...)// 阻塞直到调用返回
-当调用上述方法传入返回类型nil时表明无返回值
-result中包含调用结果，其为一个指向Call结构体的指针，可以获取信息如下
-<-result.Done   // 等待远程调用完成
-result.Err      // 远程调用错误信息，通常是连接或者服务不存在等错误
-result.Reply    // 返回值
+call := c.Go("服务名：方法名", 返回地址, 参数或指向参数的指针...)  // 不会阻塞
+err := c.Call("服务名：方法名", 返回地址，参数或指向参数的指针...) // 阻塞直到调用返回
+err := c.CallUntil(等待时间, "服务名：方法名", 返回地址, 参数或指向参数的指针...) // 等待指定时间，如果调用未完成则返回错误
+call中包含调用结果，其为一个指向Call结构体的指针，可以获取信息如下
+<-call.Done   // 等待远程调用完成
+call.Err      // 远程调用错误信息，通常是连接或者服务不存在等错误
+call.Reply    // 返回值地址
+call.WaitFor(等待时间)  // 等待指定时间，如果Call调用未完成则关闭Call
 一个例子：
-call3 := c.Call("StudentService:SetName", nil, "weiwei")
-call3 = c.Call("StudentService:SetParents", nil, &Parents{"a", "b"})
-call3 = c.Call("StudentService:GetName", "")
-assert.Equal("weiwei", call3.Reply.(string))
+err = c.Call("StudentService:SetName", nil, "weiwei")
+err = c.Call("StudentService:GetName", &str)
+assert.Equal("weiwei", str)
+err = c.CallUntil(500*time.Millisecond, "ServiceSlow:SetName", nil, "feifei")
+assert.Equal(t, client.ErrWaitingForReceiving, err)
+call := c.Go("ServiceSlow:SetName", nil, "shanshan")
+call.WaitFor(1600 * time.Millisecond)
+assert.Nil(t, call.Error)
+
+关于客户端调用超时及取消：
+区分调用的三种状态：调用未发往服务端，调用正在发往或已发往服务端，调用已完成（调用结果已返回或者已被取消）
+对于未发往服务端的调用，取消时返回ErrShutDown错误
+对于正在发往或已发往服务端的调用，取消时返回ErrWaitingForReceiving错误
+对于已完成，取消时不做任何处理
 
 
 被代理的方法必须满足如下条件：
@@ -22,11 +33,13 @@ assert.Equal("weiwei", call3.Reply.(string))
 // 有些编解码器编码后不带类型信息例如JSON，而有些则携带比如Gob。
 // 这些差异由传输接口codec的具体实现负责处理，例如：
 // Gob传输器会注册类型信息；
-// Json传输器会将Request拆开为head, body进行发送，接收方会从head获取足够的信息后再利用这些信息解码body；
+// Json传输器会将Request拆开为head, body进行发送，接收方会从head获取类型信息后再利用这些信息解码body；
 
 支持的功能：
 1，超时处理
-a，客户端发起连接并协商时如果超时则断开并释放连接
+a，客户端发起连接并协商时如果超时则断开并释放连接，并返回ErrTimeOut
+b，客户端可以取消未完成的调用，根据调用所处的阶段返回ErrShutDown，ErrWaitingForReceiving
+
 
 
 遇到的问题：

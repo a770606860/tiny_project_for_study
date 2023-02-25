@@ -14,60 +14,92 @@ import (
 	"time"
 )
 
-// TODO 支持取消请求操作
+// 内存可见性由Done通道维护
 type Call struct {
 	Seq          uint64        // 序列号
 	TargetMethod string        // <service>:<methodName>
 	Args         []interface{} // 参数
 	Reply        interface{}   // 返回数据的指针
-	Error        error
-	Done         chan *Call // 通知调用方调用完成，必须是缓存chan，以免阻塞client
+	Error        error         // 错误，例如方法不存在，连接错误等
+	Done         chan struct{} // 通知调用方调用完成，必须是缓存chan，以免阻塞client
+	c            *Client
+	mu           sync.Mutex
+	status       int
 }
 
-var TimeOutError = errors.New("connect or negotiate server time out")
+const (
+	NEW = iota
+	RECEIVING
+	FINISHED
+)
+
+var ErrTimeOut = errors.New("connect or negotiate server time out")
+var ErrWaitingForReceiving = errors.New("canceled while waiting for receiving")
+var ErrShutdown = errors.New("connection is shut down")
 
 func (call *Call) done() {
-	select {
-	case call.Done <- call:
-	default:
-		log.Panic("rpc client: error must be buffed chan!!!")
-	}
+	close(call.Done)
 }
 
+// TODO：后续可以尝试添加单向关闭功能
 type Client struct {
-	cc       codec.Codec
-	sending  sync.Mutex
-	mu       sync.Mutex
-	pending  map[uint64]*Call // 待发送和待接收数据的call
-	closing  bool
-	shutdown bool
-	seq      uint64
+	cc      codec.Codec
+	sending sync.Mutex
+	mu      sync.Mutex       // mu保护下面所有的字段
+	pending map[uint64]*Call //
+	seq     uint64
 }
 
 var _ io.Closer = (*Client)(nil)
 
-var ErrShutdown = errors.New("connection is shut down")
+// 等待指定时间后返回，如果call未完成则关闭call
+func (call *Call) WaitFor(duration time.Duration) {
+	select {
+	case <-time.After(duration):
+		call := call.c.removeCall(call.Seq)
+		if call == nil {
+			return
+		}
+		call.mu.Lock()
+		if call.status == FINISHED {
+			call.mu.Unlock()
+			return
+		} else if call.status == RECEIVING {
+			call.Error = ErrWaitingForReceiving
+		} else {
+			call.Error = ErrShutdown
+		}
+		call.status = FINISHED
+		call.mu.Unlock()
+		call.done()
+	case <-call.Done:
+	}
+}
 
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closing {
+	if c.IsClosed() {
 		return ErrShutdown
 	}
-	c.closing = true
+	c.terminateCalls(ErrShutdown)
+	return c.doClose()
+}
+
+func (c *Client) doClose() error {
+	c.pending = nil
 	return c.cc.Close()
 }
 
-func (c *Client) IsAvailable() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return !c.shutdown && !c.closing
+// must hold mu
+func (c *Client) IsClosed() bool {
+	return c.pending == nil
 }
 
 func (c *Client) registerCall(call *Call) (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closing || c.shutdown {
+	if c.IsClosed() {
 		return 0, ErrShutdown
 	}
 	call.Seq = c.seq
@@ -79,26 +111,34 @@ func (c *Client) registerCall(call *Call) (uint64, error) {
 func (c *Client) removeCall(seq uint64) *Call {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.IsClosed() {
+		return nil
+	}
 	call := c.pending[seq]
 	delete(c.pending, seq)
 	return call
 }
 
+// must hold mu before call this func
+// assert c.isClosed() false
 func (c *Client) terminateCalls(err error) {
-	// 发送锁是为了保持语义的完整
-	// TODO： defer的执行顺序未确认，理论上先解锁mu再sending
-	c.sending.Lock()
-	defer c.sending.Unlock()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.shutdown == true {
-		return
-	}
-	c.shutdown = true
 	for _, call := range c.pending {
-		call.Error = err
+		call.mu.Lock()
+		if call.status == FINISHED {
+			call.mu.Unlock()
+			continue
+		} else if call.status == RECEIVING {
+			call.Error = ErrWaitingForReceiving
+		} else {
+			call.Error = err
+		}
+		call.status = FINISHED
+		call.mu.Unlock()
 		call.done()
+
 	}
+	// 清空pending
+	c.pending = make(map[uint64]*Call)
 }
 
 func (c *Client) receive() {
@@ -108,20 +148,36 @@ func (c *Client) receive() {
 		// 有些编解码器编码后不带类型信息例如JSON，而有些则携带比如Gob。
 		// 这些差异由具体的codec的实现负责处理，例如：
 		// Gob编解器码需要注册类型；
-		// Json解码器需要将Request拆开为head, body进行发送，从head获取足够的信息后再利用这些信息解码body；
+		// Json解码器需要将Request拆开为head, body进行发送，从head获取类型信息后再利用这些信息解码body；
 		if err = c.cc.ReadResponse(&resp); err != nil {
 			break
 		}
 		call := c.removeCall(resp.Seq)
 		// 确保call未失效
 		if call != nil {
+			call.mu.Lock()
+			if call.status == FINISHED {
+				call.mu.Unlock()
+				return
+			} else if call.status != RECEIVING {
+				call.mu.Unlock()
+				// call.status must be receiving or finished
+				panic("rpc client: internal logical error")
+			}
 			if resp.Err != "" {
 				call.Error = errors.New(resp.Err)
 			}
-			call.Reply = resp.Replyv
+			if call.Reply != nil {
+				re := reflect.ValueOf(call.Reply)
+				re.Elem().Set(reflect.ValueOf(resp.Replyv))
+			}
+			call.status = FINISHED
+			call.mu.Unlock()
 			call.done()
 		}
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.terminateCalls(err)
 }
 
@@ -131,7 +187,10 @@ func (c *Client) send(call *Call) {
 
 	seq, err := c.registerCall(call)
 	if err != nil {
+		call.mu.Lock()
 		call.Error = err
+		call.status = FINISHED
+		call.mu.Unlock()
 		call.done()
 		return
 	}
@@ -148,30 +207,57 @@ func (c *Client) send(call *Call) {
 	}
 
 	req := codec.Request{Seq: seq, Argv: argd, TargetMethod: call.TargetMethod}
+	call.mu.Lock()
+	if call.status == FINISHED {
+		call.mu.Unlock()
+		return
+	}
+	call.status = RECEIVING
+	call.mu.Unlock()
 	if err := c.cc.WriteRequest(&req); err != nil {
 		// 发送失败，直接返回call
 		call := c.removeCall(seq)
 		if call != nil {
+			call.mu.Lock()
+			if call.status == FINISHED {
+				call.mu.Unlock()
+				return
+			}
 			call.Error = err
+			call.status = FINISHED
+			call.mu.Unlock()
 			call.done()
 		}
 	}
 }
 
-func (c *Client) Go(targetMethod string, replyMark interface{}, args ...interface{}) *Call {
+// result must be a pointer
+func (c *Client) Go(targetMethod string, result interface{}, args ...interface{}) *Call {
+	if result != nil && reflect.ValueOf(result).Kind() != reflect.Ptr {
+		panic("rpc client: result must be a pointer")
+	}
 	call := &Call{
 		TargetMethod: targetMethod,
 		Args:         args,
-		Done:         make(chan *Call, 10),
-		Reply:        replyMark,
+		Done:         make(chan struct{}),
+		Reply:        result,
+		status:       NEW,
+		c:            c,
 	}
 	c.send(call)
 	return call
 }
 
-func (c *Client) Call(targetMethod string, replyMark interface{}, args ...interface{}) *Call {
-	call := <-c.Go(targetMethod, replyMark, args...).Done
-	return call
+func (c *Client) Call(targetMethod string, result interface{}, args ...interface{}) error {
+	call := c.Go(targetMethod, result, args...)
+	<-call.Done
+	return call.Error
+}
+
+func (c *Client) CallUntil(duration time.Duration, targetMethod string, result interface{}, args ...interface{}) error {
+	call := c.Go(targetMethod, result, args...)
+	call.WaitFor(duration)
+	return call.Error
 }
 
 func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Option) error {
@@ -215,7 +301,7 @@ func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Optio
 		if conn != nil {
 			closeCloseable(conn)
 		}
-		return TimeOutError
+		return ErrTimeOut
 	case err := <-finish:
 		if c.cc != nil && err != nil {
 			closeCloseable(c.cc)

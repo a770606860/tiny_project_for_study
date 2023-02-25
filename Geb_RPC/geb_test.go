@@ -68,23 +68,25 @@ func Test_Main(t *testing.T) {
 	}
 
 	// test1，不注册任何服务，所以会返回错误
-	call1 := c.Go("foo", "xiaobai")
+	call1 := c.Go("foo", nil)
 	<-call1.Done
 	assert.NotNil(t, call1.Error)
 
 	// 注册服务
 	err = serv.Register(&StudentService{})
 	assert.Nil(t, err)
-	call3 := c.Call("StudentService:SetName", nil, "weiwei")
-	assert.Nil(t, call3.Error)
-	call3 = c.Call("StudentService:GetName", nil)
-	assert.Nil(t, call3.Error)
-	assert.Equal(t, "weiwei", call3.Reply.(string))
-	call3 = c.Call("StudentService:SetParents", nil, &Parents{"a", "b"})
-	assert.Nil(t, call3.Error)
-	call3 = c.Call("StudentService:GetParents", Parents{})
-	assert.Nil(t, call3.Error)
-	//assert.Equal(t, Parents{"a", "b"}, call3.Reply.(Parents))
+	var str string
+	err = c.Call("StudentService:SetName", nil, "weiwei")
+	assert.Nil(t, err)
+	err = c.Call("StudentService:GetName", &str)
+	assert.Nil(t, err)
+	assert.Equal(t, "weiwei", str)
+	var pa Parents
+	err = c.Call("StudentService:SetParents", nil, &Parents{"a", "b"})
+	assert.Nil(t, err)
+	err = c.Call("StudentService:GetParents", &pa)
+	assert.Nil(t, err)
+	assert.Equal(t, Parents{"a", "b"}, pa)
 }
 
 func Test_Timeout(t *testing.T) {
@@ -99,7 +101,7 @@ func Test_Timeout(t *testing.T) {
 		c.Close()
 	}
 	c, err = client.NewClient(ad, time.Microsecond)
-	assert.Equal(t, client.TimeOutError, err)
+	assert.Equal(t, client.ErrTimeOut, err)
 
 	c, err = client.NewClient(ad, 1*time.Second)
 	if err != nil {
@@ -131,7 +133,7 @@ func Test_Timeout(t *testing.T) {
 //	if err != nil {
 //		log.Println(err.Error())
 //	}
-//	assert.Equal(t, client.TimeOutError, err)
+//	assert.Equal(t, client.ErrTimeOut, err)
 //
 //	_, err = client.NewClient(ad, 800*time.Millisecond)
 //	assert.Nil(t, err)

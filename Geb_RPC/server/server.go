@@ -143,7 +143,7 @@ func (s *Server) readRequest(c codec.Codec) (*codec.Request, error) {
 	// 有些编解码器编码后不带类型信息例如JSON，而有些则携带比如Gob。
 	// 这些差异由具体的codec的实现负责处理，例如：
 	// Gob编解器码需要注册类型；
-	// Json解码器需要将Request拆开为head, body进行发送，从head获取足够的信息后再利用这些信息解码body；
+	// Json解码器需要将Request拆开为head, body进行发送，从head获取类型信息后再利用这些信息解码body；
 	err := c.ReadRequest(&r)
 	if err == nil {
 		log.Printf("rpc server: data recived Seq=%d", r.Seq)
