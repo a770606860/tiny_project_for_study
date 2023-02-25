@@ -298,7 +298,7 @@ func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Optio
 		cc := codec.NewGobCodec(conn)
 		c.cc = cc
 		if resp.Tick != 0 {
-			go c.ticker(resp.Tick * 3)
+			go c.ticker(resp.Tick)
 		}
 
 		return
@@ -320,7 +320,7 @@ func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Optio
 
 func (c *Client) ticker(tick int64) {
 	for {
-		err := c.cc.WriteResponse(&codec.Response{})
+		err := c.cc.WriteRequest(&codec.Request{})
 		if err != nil {
 			log.Printf("rpc client: tick failed [%s], close connection", err)
 			// 关闭连接

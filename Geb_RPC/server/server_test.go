@@ -93,9 +93,9 @@ func Test_Tick(t *testing.T) {
 	assert.Nil(t, err)
 
 	var str string
-	//err = c.Call("ServiceVerySlow:GetName", &str)
-	//assert.Nil(t, err)
-	//assert.Equal(t, "", str)
+	err = c.Call("ServiceVerySlow:GetName", &str)
+	assert.Nil(t, err)
+	assert.Equal(t, "", str)
 	time.Sleep(9 * time.Second)
 	err = c.Call("ServiceVerySlow:GetName", &str)
 	assert.NotNil(t, err)

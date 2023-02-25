@@ -107,16 +107,6 @@ func (c *GobCodec) WriteResponse(response *Response) (err error) {
 	return
 }
 
-func (c *GobCodec) write(any interface{}) (err error) {
-	defer func() {
-		_ = c.buf.Flush()
-		if err != nil {
-			_ = c.Close()
-		}
-	}()
-	return c.enc.Encode(any)
-}
-
 func NewGobCodec(conn io.ReadWriteCloser) Codec {
 	buf := bufio.NewWriter(conn)
 	return &GobCodec{
