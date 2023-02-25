@@ -41,6 +41,8 @@ assert.Nil(t, call.Error)
 a，客户端发起连接并协商时如果超时则断开并释放连接，并返回ErrTimeOut
 b，客户端可以取消未完成的调用，根据调用所处的阶段返回ErrShutDown，ErrWaitingForReceiving
 c，服务端业务方法超时，当服务端某个业务方法处理时间超过700ms，则返回ErrServiceTimeOut给客户端（注意此时业务方法仍会继续执行）
+2，心跳检测
+在使用长连接的协议时，需开启心跳
 
 
 
