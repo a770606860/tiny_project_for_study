@@ -82,7 +82,7 @@ func (c *Client) Close() error {
 	if c.IsClosed() {
 		return ErrShutdown
 	}
-	c.terminateCalls(ErrShutdown)
+	c.terminateCalls()
 	return c.doClose()
 }
 
@@ -121,7 +121,7 @@ func (c *Client) removeCall(seq uint64) *Call {
 
 // must hold mu before call this func
 // assert c.isClosed() false
-func (c *Client) terminateCalls(err error) {
+func (c *Client) terminateCalls() {
 	for _, call := range c.pending {
 		call.mu.Lock()
 		if call.status == FINISHED {
@@ -130,7 +130,7 @@ func (c *Client) terminateCalls(err error) {
 		} else if call.status == RECEIVING {
 			call.Error = ErrWaitingForReceiving
 		} else {
-			call.Error = err
+			call.Error = ErrShutdown
 		}
 		call.status = FINISHED
 		call.mu.Unlock()
@@ -150,6 +150,7 @@ func (c *Client) receive() {
 		// Gob编解器码需要注册类型；
 		// Json解码器需要将Request拆开为head, body进行发送，从head获取类型信息后再利用这些信息解码body；
 		if err = c.cc.ReadResponse(&resp); err != nil {
+			log.Printf("rpc client: read error [%s]", err)
 			break
 		}
 		call := c.removeCall(resp.Seq)
@@ -178,7 +179,7 @@ func (c *Client) receive() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.terminateCalls(err)
+	c.terminateCalls()
 }
 
 func (c *Client) send(call *Call) {
