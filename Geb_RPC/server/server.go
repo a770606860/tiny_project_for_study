@@ -93,25 +93,52 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		return
 	}
 	log.Printf("rpc server: client approved")
-	if _, err := conn.Write([]byte("ok")); err != nil { // 发送确认信息到客户端失败
-		log.Printf("rpc server: connection err %s", err)
-		closeCloseable(conn)
-		return
-	}
+	var tick int64
 
 	var c codec.Codec
 	switch opt.CodecType {
 	case codec.GobType:
 		c = codec.NewGobCodec(conn)
+		tick = 2
 	default:
 		log.Println("rpc server: unsupported codec type")
 		closeCloseable(conn)
 		return
 	}
-	s.serveCodec(c)
+	if err := json.NewEncoder(conn).Encode(protocol.ServerReply{Code: "ok", Tick: tick}); err != nil { // 发送确认信息到客户端失败
+		log.Printf("rpc server: connection err %s", err)
+		closeCloseable(conn)
+		return
+	}
+	// 心跳检测
+	var ch chan struct{}
+	if tick != 0 {
+		ch = make(chan struct{}, 10)
+		go heartListen(tick, ch, c)
+	}
+
+	s.serveCodec(c, ch)
 }
 
-func (s *Server) serveCodec(c codec.Codec) {
+func heartListen(tick int64, ch chan struct{}, c codec.Codec) {
+	tick = tick * 2
+	for {
+		select {
+		case <-time.After(time.Duration(tick) * time.Second):
+			closeCloseable(c)
+			if conn, ok := c.GetConn().(net.Conn); ok {
+				log.Printf("rpc server: failed receive client tick  %s", conn.RemoteAddr())
+			}
+			return
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) serveCodec(c codec.Codec, tick chan struct{}) {
 	var wg sync.WaitGroup
 	resultCh := make(chan *codec.Response, 10)
 	go s.sendResponse(c, resultCh)
@@ -127,6 +154,12 @@ loop:
 		if err != nil {
 			break loop
 		}
+		// 当targetMethod为nil时，为心跳包
+		if req.TargetMethod == "" && tick != nil {
+			tick <- struct{}{}
+			continue
+		}
+
 		wg.Add(1)
 		go func() {
 			s.handleRequest(req, resultCh, err)
@@ -135,6 +168,9 @@ loop:
 	}
 	wg.Wait()
 	close(resultCh)
+	if tick != nil {
+		close(tick)
+	}
 	if cc, ok := c.GetConn().(net.Conn); ok {
 		log.Printf("rpc server: close connection [%s:%s]", cc.RemoteAddr(), cc.LocalAddr())
 	}
@@ -216,7 +252,11 @@ func (s *Server) Accept(lis net.Listener) {
 	}
 }
 
+// TODO 暂时使用recover处理重复关闭的情况，后续改为Closer自己记录关闭状态
 func closeCloseable(closeable io.Closer) {
+	defer func() {
+		_ = recover()
+	}()
 	if err := closeable.Close(); err != nil {
 		log.Printf("rpc server: close error %v", err)
 	}

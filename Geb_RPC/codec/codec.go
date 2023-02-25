@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/gob"
 	"io"
-	"log"
 	"reflect"
 	"sync"
 )
@@ -64,15 +63,12 @@ func (c *GobCodec) ReadRequest(request *Request) error {
 }
 
 func (c *GobCodec) WriteRequest(request *Request) (err error) {
-	defer func() {
-		e := c.buf.Flush()
-		if e != nil {
-			log.Printf("rpc codec: buf flush err %s", e)
-		}
-	}()
 	c.register(request)
 	err = c.enc.Encode(request)
-	return
+	if err != nil {
+		return
+	}
+	return c.buf.Flush()
 }
 
 // Gob编解码器需要注册类型信息，否则编解码会出错
@@ -102,14 +98,12 @@ func (c *GobCodec) register(any interface{}) {
 }
 
 func (c *GobCodec) WriteResponse(response *Response) (err error) {
-	defer func() {
-		e := c.buf.Flush()
-		if e != nil {
-			log.Printf("rpc codec: buf flush err %s", e)
-		}
-	}()
 	c.register(response)
 	err = c.enc.Encode(response)
+	if err != nil {
+		return
+	}
+	err = c.buf.Flush()
 	return
 }
 

@@ -11,6 +11,11 @@ type Option struct {
 	CodecType   codec.Type
 }
 
+type ServerReply struct {
+	Code string
+	Tick int64 // 心跳间隔，单位秒
+}
+
 var DefaultOption = &Option{
 	MagicNumber: MagicNumber,
 	CodecType:   codec.GobType,

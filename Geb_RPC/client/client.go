@@ -34,7 +34,7 @@ const (
 )
 
 var ErrTimeOut = errors.New("connect or negotiate server time out")
-var ErrWaitingForReceiving = errors.New("canceled while waiting for receiving")
+var ErrWaitingForReceiving = errors.New("call canceled while sending or waiting-for-receiving")
 var ErrShutdown = errors.New("connection is shut down")
 
 func (call *Call) done() {
@@ -214,16 +214,18 @@ func (c *Client) send(call *Call) {
 	}
 	call.status = RECEIVING
 	call.mu.Unlock()
+
 	if err := c.cc.WriteRequest(&req); err != nil {
 		// 发送失败，直接返回call
 		call := c.removeCall(seq)
 		if call != nil {
+			log.Printf("rpc client: sending error %s", err)
 			call.mu.Lock()
 			if call.status == FINISHED {
 				call.mu.Unlock()
 				return
 			}
-			call.Error = err
+			call.Error = ErrShutdown
 			call.status = FINISHED
 			call.mu.Unlock()
 			call.done()
@@ -281,18 +283,23 @@ func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Optio
 			log.Printf("rpc client: %v", err)
 			return
 		}
-		resp := make([]byte, 2)
-		_, err = conn.Read(resp)
+		var resp protocol.ServerReply
+		err = json.NewDecoder(conn).Decode(&resp)
 		if err != nil {
 			log.Printf("rpc client: %v", err)
 			return
 		}
-		if string(resp) != "ok" {
+		if resp.Code != "ok" {
 			err = fmt.Errorf("server refused %s", resp)
 			return
 		}
+
 		cc := codec.NewGobCodec(conn)
 		c.cc = cc
+		if resp.Tick != 0 {
+			go c.ticker(resp.Tick * 3)
+		}
+
 		return
 	}()
 	select {
@@ -307,6 +314,19 @@ func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Optio
 			closeCloseable(c.cc)
 		}
 		return err
+	}
+}
+
+func (c *Client) ticker(tick int64) {
+	for {
+		err := c.cc.WriteResponse(&codec.Response{})
+		if err != nil {
+			log.Printf("rpc client: tick failed [%s], close connection", err)
+			// 关闭连接
+			closeCloseable(c)
+			return
+		}
+		time.Sleep(time.Duration(tick) * time.Second)
 	}
 }
 
