@@ -55,10 +55,12 @@ type RegisterServer struct {
 func (reg *RegisterServer) Register(name _name, addr _IPv4, lAddr _IPv4, tick time.Duration) (*Service, error) {
 	se := Service{name: name, addr: addr, lAddr: lAddr, tick: tick,
 		reg: reg, interest: make(map[_name]struct{})}
-	//err := reg.aliveCheck(&se)
-	//if err != nil {
-	//	return nil, err
-	//}
+	// 启动心跳监测
+	err := reg.aliveCheck(&se)
+	if err != nil {
+		return nil, err
+	}
+
 	reg.seMu.Lock()
 	reg.id = reg.id + 1
 	se.id = reg.id
@@ -118,14 +120,15 @@ func (reg *RegisterServer) GetServiceAddr(id _id, name _name) []_IPv4 {
 	reg.seMu.Lock()
 	s := reg.idToService[id]
 	sers := reg.services[name]
+	if s == nil {
+		reg.seMu.Unlock()
+		return nil
+	}
 	// 将服务添加到感兴趣集合中
 	s.mu.Lock()
 	s.interest[name] = struct{}{}
 	s.mu.Unlock()
-	if s == nil || len(sers) == 0 {
-		reg.seMu.Unlock()
-		return nil
-	}
+
 	addrs := make([]_IPv4, 0, len(sers))
 	for _, s := range sers {
 		addrs = append(addrs, s.addr)

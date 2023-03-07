@@ -257,7 +257,7 @@ func (reg *RegisterClient) heartBeatHTTP() error {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("resign client failed, code %d", resp.StatusCode)
+		return fmt.Errorf("response code %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -270,6 +270,6 @@ func NewClient(name, addr, serverAddr string, tick time.Duration) (*RegisterClie
 		return nil, err
 	}
 	// 启动心跳
-	// go c.heartBeat()
+	go c.heartBeat()
 	return c, nil
 }

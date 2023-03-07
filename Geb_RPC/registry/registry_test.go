@@ -86,9 +86,11 @@ func TestGetServices(t *testing.T) {
 	//再添加一个服务
 	c3, err := newClient("serv2", se.addr)
 	assert.Nil(t, err)
+	c4, err := newClient("serv2", se.addr)
+	assert.Nil(t, err)
 	time.Sleep(time.Millisecond * 100)
 	ser = c1.GetServiceAdders("serv2")
-	assert.Equal(t, 2, len(ser))
+	assert.Equal(t, 3, len(ser))
 
 	// 删除服务
 	err = c2.Close()
@@ -96,25 +98,18 @@ func TestGetServices(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 	ser = c1.GetServiceAdders("serv2")
 	time.Sleep(time.Millisecond * 100)
+	assert.Equal(t, 2, len(ser))
+
+	ser = c3.GetServiceAdders("serv1")
+	assert.Equal(t, 1, len(ser))
+
+	// 更改c4的id为不存在的id，模拟心跳失败
+	c4.id = 1001
+	time.Sleep(4 * time.Second)
+	ser = c1.GetServiceAdders("serv2")
 	assert.Equal(t, 1, len(ser))
 
 	ser = c3.GetServiceAdders("serv1")
 	assert.Equal(t, 1, len(ser))
 	se.printInfo()
-}
-
-func TestSome(t *testing.T) {
-	ch1 := make(chan int, 10)
-
-	go func() {
-		for v := range ch1 {
-			log.Println(v)
-		}
-	}()
-
-	ch1 <- 2
-	ch1 <- 3
-
-	for {
-	}
 }
