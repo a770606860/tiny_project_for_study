@@ -93,7 +93,19 @@ func (reg *RegisterClient) register(name, addr string, tick time.Duration, updat
 		}()
 		go reg.doUpdate()
 	}
-	return reg.registerHTTP(name, addr, tick, update)
+	if err := reg.registerHTTP(name, addr, tick, update); err != nil {
+		if update {
+			if err := reg.l.Close(); err != nil {
+				log.Printf("rpc registry: stop lAddr %s error %v", reg.lAddr, err)
+			}
+			close(reg.ch)
+			reg.l = nil
+			reg.ch = nil
+			reg.lAddr = ""
+		}
+		return err
+	}
+	return nil
 }
 
 func (reg *RegisterClient) resign() error {
@@ -116,7 +128,7 @@ func (reg *RegisterClient) Close() error {
 		}
 	}
 	return err
-	// TODO 赋空字段，方便垃圾回收
+	// TODO 赋空字段
 }
 
 func (reg *RegisterClient) update(name _name, addrs []_IPv4) {
