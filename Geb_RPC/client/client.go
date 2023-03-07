@@ -80,7 +80,7 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.IsClosed() {
-		return ErrShutdown
+		return nil
 	}
 	c.terminateCalls()
 	return c.doClose()
@@ -291,7 +291,7 @@ func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Optio
 			return
 		}
 		if resp.Code != "ok" {
-			err = fmt.Errorf("server refused %s", resp)
+			err = fmt.Errorf("server refused %s", resp.Code)
 			return
 		}
 
