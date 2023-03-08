@@ -22,6 +22,7 @@ func newClient(name, serverAddr string) (*RegisterClient, error) {
 	return c, nil
 }
 
+// 单独测试该方法
 func TestRegisterAndResign(t *testing.T) {
 	se, err := StartServer()
 	assert.Nil(t, err)
@@ -67,20 +68,21 @@ func TestRegisterAndResign(t *testing.T) {
 	se.clMu.Unlock()
 }
 
+// 单独测试该方法
 func TestGetServices(t *testing.T) {
 	se, err := StartServer()
 	assert.Nil(t, err)
 	c1, err := newClient("serv1", se.addr)
 	assert.Nil(t, err)
 
-	ser := c1.GetServiceAdders("serv2")
+	ser, _ := c1.GetServiceAdders("serv2")
 	assert.Equal(t, 0, len(ser))
 
 	//添加服务
 	c2, err := newClient("serv2", se.addr)
 	assert.Nil(t, err)
 	time.Sleep(time.Millisecond * 100)
-	ser = c1.GetServiceAdders("serv2")
+	ser, _ = c1.GetServiceAdders("serv2")
 	assert.Equal(t, 1, len(ser))
 
 	//再添加一个服务
@@ -89,27 +91,29 @@ func TestGetServices(t *testing.T) {
 	c4, err := newClient("serv2", se.addr)
 	assert.Nil(t, err)
 	time.Sleep(time.Millisecond * 100)
-	ser = c1.GetServiceAdders("serv2")
+	ser, _ = c1.GetServiceAdders("serv2")
 	assert.Equal(t, 3, len(ser))
 
 	// 删除服务
 	err = c2.Close()
 	assert.Nil(t, err)
 	time.Sleep(time.Millisecond * 100)
-	ser = c1.GetServiceAdders("serv2")
+	ser, _ = c1.GetServiceAdders("serv2")
 	time.Sleep(time.Millisecond * 100)
 	assert.Equal(t, 2, len(ser))
 
-	ser = c3.GetServiceAdders("serv1")
+	ser, _ = c3.GetServiceAdders("serv1")
 	assert.Equal(t, 1, len(ser))
 
 	// 更改c4的id为不存在的id，模拟心跳失败
+	c4.mu.Lock()
 	c4.id = 1001
-	time.Sleep(4 * time.Second)
-	ser = c1.GetServiceAdders("serv2")
+	c4.mu.Unlock()
+	time.Sleep(5 * time.Second)
+	ser, _ = c1.GetServiceAdders("serv2")
 	assert.Equal(t, 1, len(ser))
 
-	ser = c3.GetServiceAdders("serv1")
+	ser, _ = c3.GetServiceAdders("serv1")
 	assert.Equal(t, 1, len(ser))
 	se.printInfo()
 }

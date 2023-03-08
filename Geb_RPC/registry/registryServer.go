@@ -56,7 +56,7 @@ func (reg *RegisterServer) Register(name _name, addr _IPv4, lAddr _IPv4, tick ti
 	se := Service{name: name, addr: addr, lAddr: lAddr, tick: tick,
 		reg: reg, interest: make(map[_name]struct{})}
 	// 启动心跳监测
-	err := reg.aliveCheck(&se)
+	err := reg.issueAliveCheck(&se)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (reg *RegisterServer) Register(name _name, addr _IPv4, lAddr _IPv4, tick ti
 		reg.clMu.Unlock()
 	}
 	// 推送更新
-	go reg.inFormChanges(&se)
+	go reg.informChanges(&se)
 	log.Printf("rpc registry: Service %d registed", reg.id)
 	return &se, nil
 }
@@ -107,7 +107,7 @@ func (reg *RegisterServer) Resign(id _id) {
 		reg.clMu.Unlock()
 	}
 	// 推送更新
-	go reg.inFormChanges(s)
+	reg.informChanges(s)
 	// 关闭服务
 	err := s.Close()
 	if err != nil {
@@ -138,7 +138,7 @@ func (reg *RegisterServer) GetServiceAddr(id _id, name _name) []_IPv4 {
 	return addrs
 }
 
-func (reg *RegisterServer) aliveCheck(s *Service) error {
+func (reg *RegisterServer) issueAliveCheck(s *Service) error {
 	s.aliveCh = make(chan struct{}, 1)
 	tick := int(s.tick.Seconds() * 3)
 	if tick == 0 {
@@ -153,7 +153,7 @@ func (reg *RegisterServer) aliveCheck(s *Service) error {
 				return
 			case _, ok := <-s.aliveCh:
 				if !ok {
-					reg.Resign(s.id)
+					return
 				}
 			}
 		}
@@ -162,7 +162,7 @@ func (reg *RegisterServer) aliveCheck(s *Service) error {
 	return nil
 }
 
-func (reg *RegisterServer) inFormChanges(s *Service) {
+func (reg *RegisterServer) informChanges(s *Service) {
 	var toBeInformed []*Service
 	reg.clMu.Lock()
 	for _, v := range reg.clients {
@@ -210,15 +210,19 @@ func (reg *RegisterServer) HandleRegister(w http.ResponseWriter, r *http.Request
 func (reg *RegisterServer) HandleHeartBeat(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.Header.Get("id"))
 	if err != nil {
+		log.Printf("rpc register: heartbeat no id")
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+
+	// log.Printf("rpc registry: heartbeat client id=%d", id)
 
 	reg.seMu.Lock()
 	s := reg.idToService[id]
 	reg.seMu.Unlock()
 
 	if s == nil {
+		// log.Printf("rpc registry: heartbeat no id=%d ", id)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -226,9 +230,11 @@ func (reg *RegisterServer) HandleHeartBeat(w http.ResponseWriter, r *http.Reques
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
+		// log.Printf("rpc registry: heartbeat id=%d has closed", id)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	// 写通道时必须持有锁否则可能导致向关闭通道写入数据的异常
 	select {
 	case s.aliveCh <- struct{}{}:
 	default:

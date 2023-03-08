@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// 和注册中心的通信使用http协议，SON编码
+// 和注册中心的通信使用http协议，JSON编码
 type RegisterClient struct {
 	// 注册中心地址，IPv4地址
 	ServerAddr _IPv4
@@ -41,11 +41,17 @@ type Updates struct {
 	addrs []_IPv4
 }
 
-func (reg *RegisterClient) GetServiceAdders(name string) []string {
+var ErrClosed = errors.New("client already closed")
+
+func (reg *RegisterClient) GetServiceAdders(name string) ([]string, error) {
 	if len(name) == 0 {
-		return nil
+		return nil, errors.New("name must not empty")
 	}
 	reg.mu.Lock()
+	if reg.closed {
+		reg.mu.Unlock()
+		return nil, ErrClosed
+	}
 	s, ok := reg.services[name]
 	if !ok {
 		reg.mu.Unlock()
@@ -54,23 +60,22 @@ func (reg *RegisterClient) GetServiceAdders(name string) []string {
 		addr := make([]string, len(s))
 		copy(addr, s)
 		reg.mu.Unlock()
-		return addr
+		return addr, nil
 	}
 }
 
-func (reg *RegisterClient) GetServiceAddrsForce(name string) []string {
+func (reg *RegisterClient) GetServiceAddrsForce(name string) ([]string, error) {
 	if len(name) == 0 {
-		return nil
+		return nil, errors.New("name must not empty")
 	}
 	addrs, err := reg.getAddrsHTTP(name)
 	if err != nil {
-		log.Printf("rpc registry: get service %s error %v", name, err)
-		return nil
+		return nil, err
 	}
 	reg.mu.Lock()
 	reg.services[name] = addrs
 	reg.mu.Unlock()
-	return addrs
+	return addrs, nil
 }
 
 func (reg *RegisterClient) register(name, addr string, tick time.Duration, update bool) error {
@@ -88,7 +93,7 @@ func (reg *RegisterClient) register(name, addr string, tick time.Duration, updat
 		// 启动监听服务
 		go func() {
 			handler := http.NewServeMux()
-			handler.HandleFunc("/update", reg.updateHTTP)
+			handler.HandleFunc("/update", reg.HandleUpdate)
 			_ = http.Serve(l, handler)
 		}()
 		go reg.doUpdate()
@@ -155,22 +160,24 @@ func (reg *RegisterClient) heartBeat() {
 			reg.mu.Unlock()
 			return
 		}
-		err := reg.heartBeatHTTP()
 		reg.mu.Unlock()
-		if err != nil {
-			log.Printf("rpc registry: heartbeat error %v", err)
-		}
+		go func() {
+			err := reg.heartBeatHTTP()
+			if err != nil {
+				// log.Printf("rpc registry: heartbeat id=%d error %v", reg.id, err)
+			}
+		}()
 	}
 }
 
-func (reg *RegisterClient) updateHTTP(writer http.ResponseWriter, request *http.Request) {
+func (reg *RegisterClient) HandleUpdate(writer http.ResponseWriter, request *http.Request) {
 	name := request.Header.Get("name")
 	var addrs []_IPv4
 	data, _ := ioutil.ReadAll(request.Body)
 	_ = request.Body.Close()
 	err := json.Unmarshal(data, &addrs)
 	if err != nil {
-		log.Printf("rpc registry: updateHTTP failed %v", err)
+		log.Printf("rpc registry: HandleUpdate failed %v", err)
 		writer.WriteHeader(http.StatusOK)
 		return
 	}
