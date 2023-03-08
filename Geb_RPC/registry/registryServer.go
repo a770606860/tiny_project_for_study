@@ -49,6 +49,22 @@ type RegisterServer struct {
 	id          _id // id生成
 	clMu        sync.Mutex
 	clients     map[_id]*Service // 注册了被动更新的客户端集合
+
+	mu     sync.Mutex
+	closed bool
+	l      net.Listener
+}
+
+func (reg *RegisterServer) Close() error {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if !reg.closed {
+		reg.closed = true
+		if reg.l != nil {
+			return reg.l.Close()
+		}
+	}
+	return nil
 }
 
 // 注册成功则返回
@@ -320,6 +336,7 @@ func StartServer() (*RegisterServer, error) {
 		// 启动服务器
 		_ = http.Serve(l, ser)
 	}()
+	se.l = l
 	return se, nil
 }
 

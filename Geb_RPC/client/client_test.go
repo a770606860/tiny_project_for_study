@@ -61,7 +61,7 @@ func Test_Main(t *testing.T) {
 	// 启动客户端和服务器
 	addr := make(chan string)
 	go startServer(addr)
-	c, err := NewClient(<-addr, time.Second)
+	c, err := NewClientTimeOut(<-addr, time.Second)
 	if err != nil {
 		log.Fatal("New client error: ", err)
 	}
@@ -92,17 +92,17 @@ func Test_Timeout(t *testing.T) {
 	addr := make(chan string)
 	go startServer(addr)
 	ad := <-addr
-	c, err := NewClient(ad, 400*time.Millisecond)
+	c, err := NewClientTimeOut(ad, 400*time.Millisecond)
 	assert.Nil(t, err)
 	if err != nil {
 		log.Println(err)
 	} else {
 		c.Close()
 	}
-	c, err = NewClient(ad, time.Microsecond)
+	c, err = NewClientTimeOut(ad, time.Microsecond)
 	assert.Equal(t, ErrTimeOut, err)
 
-	c, err = NewClient(ad, 1*time.Second)
+	c, err = NewClientTimeOut(ad, 1*time.Second)
 	if err != nil {
 		log.Println(err)
 	}
@@ -120,7 +120,7 @@ func Test_Timeout(t *testing.T) {
 //	addr := make(chan string)
 //	go startServer(addr)
 //	ad := <-addr
-//	// 下面的测试需要在client.dail函数中添加sleep代码以测试协商过程过长是否能够即使返回
+//	// 下面的测试需要在client.negotiate函数中添加sleep代码以测试协商过程过长是否能够即使返回
 //	// // 		err = json.NewEncoder(conn).Encode(option)
 //	//		if err != nil {
 //	//			return
@@ -128,12 +128,12 @@ func Test_Timeout(t *testing.T) {
 //	//		time.Sleep(500 * time.Millisecond)
 //	//		resp := make([]byte, 2)
 //	// //
-//	_, err := client.NewClient(ad, 400*time.Millisecond)
+//	_, err := NewClientTimeOut(ad, 400*time.Millisecond)
 //	if err != nil {
 //		log.Println(err.Error())
 //	}
-//	assert.Equal(t, client.ErrTimeOut, err)
+//	assert.Equal(t, ErrTimeOut, err)
 //
-//	_, err = client.NewClient(ad, 800*time.Millisecond)
+//	_, err = NewClientTimeOut(ad, 800*time.Millisecond)
 //	assert.Nil(t, err)
 //}

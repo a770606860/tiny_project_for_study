@@ -35,7 +35,7 @@ const (
 
 var ErrTimeOut = errors.New("connect or negotiate server time out")
 var ErrWaitingForReceiving = errors.New("call canceled while sending or waiting-for-receiving")
-var ErrShutdown = errors.New("connection is shut down")
+var ErrShutdown = errors.New("connection is shut down and call didn't send")
 
 func (call *Call) done() {
 	close(call.Done)
@@ -43,9 +43,9 @@ func (call *Call) done() {
 
 // TODO：后续可以尝试添加单向关闭功能
 type Client struct {
-	cc      codec.Codec
 	sending sync.Mutex
-	mu      sync.Mutex       // mu保护下面所有的字段
+	mu      sync.Mutex // mu保护下面所有的字段
+	cc      codec.Codec
 	pending map[uint64]*Call //
 	seq     uint64
 }
@@ -88,6 +88,9 @@ func (c *Client) Close() error {
 
 func (c *Client) doClose() error {
 	c.pending = nil
+	if c.cc == nil {
+		return nil
+	}
 	return c.cc.Close()
 }
 
@@ -263,7 +266,52 @@ func (c *Client) CallUntil(duration time.Duration, targetMethod string, result i
 	return call.Error
 }
 
-func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Option) error {
+func (c *Client) negotiate(conn net.Conn, option *protocol.Option) error {
+	err := json.NewEncoder(conn).Encode(option)
+	log.Println("rpc client: option sent")
+	if err != nil {
+		// log.Printf("rpc client: %v", err)
+		return err
+	}
+	var resp protocol.ServerReply
+	err = json.NewDecoder(conn).Decode(&resp)
+	if err != nil {
+		// log.Printf("rpc client: %v", err)
+		return err
+	}
+	if resp.Code != "ok" {
+		err = fmt.Errorf("server refused %s", resp.Code)
+		return err
+	}
+
+	c.mu.Lock()
+	if !c.IsClosed() {
+		cc := codec.NewGobCodec(conn)
+		c.cc = cc
+	}
+	c.mu.Unlock()
+
+	if resp.Tick != 0 {
+		go c.ticker(resp.Tick)
+	}
+	return nil
+}
+
+func (c *Client) dail(addr string, option *protocol.Option) error {
+	conn, err := net.Dial("tcp", addr)
+	if err == nil {
+		log.Printf("rpc client: connection established, negociating")
+	} else {
+		return err
+	}
+	err = c.negotiate(conn, option)
+	if err != nil {
+		closeCloseable(c)
+	}
+	return err
+}
+
+func (c *Client) dailTimeout(addr string, timeOut time.Duration, option *protocol.Option) error {
 	finish := make(chan error, 1)
 	connCh := make(chan net.Conn, 1)
 	go func() {
@@ -278,41 +326,18 @@ func (c *Client) dail(addr string, timeOut time.Duration, option *protocol.Optio
 		if err != nil {
 			return
 		}
-		err = json.NewEncoder(conn).Encode(option)
-		log.Println("rpc client: option sent")
-		if err != nil {
-			log.Printf("rpc client: %v", err)
-			return
-		}
-		var resp protocol.ServerReply
-		err = json.NewDecoder(conn).Decode(&resp)
-		if err != nil {
-			log.Printf("rpc client: %v", err)
-			return
-		}
-		if resp.Code != "ok" {
-			err = fmt.Errorf("server refused %s", resp.Code)
-			return
-		}
-
-		cc := codec.NewGobCodec(conn)
-		c.cc = cc
-		if resp.Tick != 0 {
-			go c.ticker(resp.Tick)
-		}
-
-		return
+		err = c.negotiate(conn, option)
 	}()
 	select {
 	case <-time.After(timeOut):
-		conn := <-connCh
-		if conn != nil {
-			closeCloseable(conn)
-		}
+		// 等待连接返回，释放连接资源
+		<-connCh
+		closeCloseable(c)
+
 		return ErrTimeOut
 	case err := <-finish:
-		if c.cc != nil && err != nil {
-			closeCloseable(c.cc)
+		if err != nil {
+			closeCloseable(c)
 		}
 		return err
 	}
@@ -338,10 +363,10 @@ func closeCloseable(closeable io.Closer) {
 	}
 }
 
-func NewClient(addr string, timeOut time.Duration, option ...*protocol.Option) (*Client, error) {
+func NewClientTimeOut(addr string, timeOut time.Duration, option ...*protocol.Option) (*Client, error) {
 	c := &Client{pending: make(map[uint64]*Call)}
 	op := parseOption(option...)
-	if err := c.dail(addr, timeOut, op); err != nil {
+	if err := c.dailTimeout(addr, timeOut, op); err != nil {
 		return nil, err
 	}
 	go c.receive()

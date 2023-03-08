@@ -23,7 +23,7 @@ func Test_Cancel(t *testing.T) {
 	// 启动客户端和服务器
 	addr := make(chan string)
 	go startServer(addr)
-	c, err := NewClient(<-addr, time.Second)
+	c, err := NewClientTimeOut(<-addr, time.Second)
 	if err != nil {
 		log.Fatal("New client error: ", err)
 	}

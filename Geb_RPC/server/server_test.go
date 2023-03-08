@@ -47,7 +47,7 @@ func Test_TimeOut(t *testing.T) {
 	// 启动客户端和服务器
 	addr := make(chan string)
 	go startServer(addr)
-	c, err := client.NewClient(<-addr, time.Second)
+	c, err := client.NewClientTimeOut(<-addr, time.Second)
 	if err != nil {
 		log.Fatal("New client error: ", err)
 	}
@@ -83,7 +83,7 @@ func Test_TimeOut(t *testing.T) {
 //	// 启动客户端和服务器
 //	addr := make(chan string)
 //	go startServer(addr)
-//	c, err := client.NewClient(<-addr, time.Second)
+//	c, err := client.NewClientTimeOut(<-addr, time.Second)
 //	if err != nil {
 //		log.Fatal("New client error: ", err)
 //	}

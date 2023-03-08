@@ -114,10 +114,11 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 	var ch chan struct{}
 	if tick != 0 {
 		ch = make(chan struct{}, 10)
+		defer close(ch)
 		go heartListen(tick, ch, c)
 	}
 
-	s.serveCodec(c, ch)
+	s.serveCodec(c, ch) // 死循环
 }
 
 func heartListen(tick int64, ch chan struct{}, c codec.Codec) {
@@ -144,12 +145,13 @@ func (s *Server) serveCodec(c codec.Codec, tick chan struct{}) {
 	go s.sendResponse(c, resultCh)
 loop:
 	for {
-		// 连接损坏则停止处理
+		// 写损坏，停止处理
 		select {
 		case <-c.Failed():
 			break loop
 		default:
 		}
+		// 读损坏，停止处理
 		req, err := s.readRequest(c)
 		if err != nil {
 			break loop
@@ -168,9 +170,6 @@ loop:
 	}
 	wg.Wait()
 	close(resultCh)
-	if tick != nil {
-		close(tick)
-	}
 	if cc, ok := c.GetConn().(net.Conn); ok {
 		log.Printf("rpc server: close connection [%s:%s]", cc.RemoteAddr(), cc.LocalAddr())
 	}
@@ -227,7 +226,7 @@ func (s *Server) sendResponse(c codec.Codec, ch chan *codec.Response) {
 		err := c.WriteResponse(r)
 		if err != nil {
 			log.Printf("rpc server: send error Seq=%d %s", r.Seq, err)
-			close(c.Failed()) // 发送数据发生错误，表明conn损坏
+			closeCloseable(c)
 			break
 		} else {
 			log.Printf("rpc server: data sended Seq=%d", r.Seq)
@@ -252,11 +251,7 @@ func (s *Server) Accept(lis net.Listener) {
 	}
 }
 
-// TODO 暂时使用recover处理重复关闭的情况，后续改为Closer自己记录关闭状态
 func closeCloseable(closeable io.Closer) {
-	defer func() {
-		_ = recover()
-	}()
 	if err := closeable.Close(); err != nil {
 		log.Printf("rpc server: close error %v", err)
 	}

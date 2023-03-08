@@ -22,7 +22,6 @@ func newClient(name, serverAddr string) (*RegisterClient, error) {
 	return c, nil
 }
 
-// 单独测试该方法
 func TestRegisterAndResign(t *testing.T) {
 	se, err := StartServer()
 	assert.Nil(t, err)
@@ -66,9 +65,11 @@ func TestRegisterAndResign(t *testing.T) {
 	se.clMu.Lock()
 	assert.Equal(t, 0, len(se.clients))
 	se.clMu.Unlock()
+
+	err = se.Close()
+	assert.Nil(t, err)
 }
 
-// 单独测试该方法
 func TestGetServices(t *testing.T) {
 	se, err := StartServer()
 	assert.Nil(t, err)
@@ -116,4 +117,7 @@ func TestGetServices(t *testing.T) {
 	ser, _ = c3.GetServiceAdders("serv1")
 	assert.Equal(t, 1, len(ser))
 	se.printInfo()
+
+	err = se.Close()
+	assert.Nil(t, err)
 }

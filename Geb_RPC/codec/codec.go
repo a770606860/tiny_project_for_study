@@ -37,11 +37,19 @@ type GobCodec struct {
 	enc    *gob.Encoder
 	failed chan struct{} // 数据发送队列
 	types  sync.Map
+	mu     sync.Mutex
+	closed bool
 }
 
 func (c *GobCodec) Close() error {
-	close(c.failed)
-	return c.conn.Close()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed {
+		c.closed = true
+		close(c.failed)
+		return c.conn.Close()
+	}
+	return nil
 }
 
 func (c *GobCodec) Failed() chan struct{} {
