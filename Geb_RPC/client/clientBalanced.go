@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-type _IPV4 = string
-
 var mu sync.Mutex
 var nameId int // 客户端名字生成器
 
@@ -26,7 +24,7 @@ type BalancedClient struct {
 	option *protocol.Option
 
 	mu      sync.Mutex
-	clients map[_IPV4]*CClient // 服务
+	clients map[string]*CClient // 服务
 	closed  bool
 }
 
