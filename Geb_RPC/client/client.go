@@ -21,12 +21,13 @@ type Call struct {
 	Args         []interface{} // 参数
 	Reply        interface{}   // 返回数据的指针
 	Error        error         // 错误，例如方法不存在，连接错误等
-	Done         chan struct{} // 通知调用方调用完成，必须是缓存chan，以免阻塞client
+	Done         chan struct{} // 通知调用方调用完成，当Done被关闭时表明完成
 	c            *Client
 	mu           sync.Mutex
 	status       int
 }
 
+// call status
 const (
 	NEW = iota
 	RECEIVING
@@ -42,12 +43,14 @@ func (call *Call) done() {
 }
 
 // TODO：后续可以尝试添加单向关闭功能
+// 不变式：pending中保存的call都处于RECEIVING，等待处理结果状态
 type Client struct {
-	sending sync.Mutex
+	sending sync.Mutex // 发送锁，因为只有一个连接因此串行发送操作
 	mu      sync.Mutex // mu保护下面所有的字段
 	cc      codec.Codec
-	pending map[uint64]*Call //
+	pending map[uint64]*Call // 正在进行中的call
 	seq     uint64
+	closed  bool
 }
 
 var _ io.Closer = (*Client)(nil)
@@ -55,54 +58,52 @@ var _ io.Closer = (*Client)(nil)
 // 等待指定时间后返回，如果call未完成则关闭call
 func (call *Call) WaitFor(duration time.Duration) {
 	select {
-	case <-time.After(duration):
+	case <-time.After(duration): // 超时
 		call := call.c.removeCall(call.Seq)
 		if call == nil {
 			return
 		}
 		call.mu.Lock()
-		if call.status == FINISHED {
-			call.mu.Unlock()
-			return
-		} else if call.status == RECEIVING {
-			call.Error = ErrWaitingForReceiving
-		} else {
-			call.Error = ErrShutdown
-		}
+		call.Error = ErrWaitingForReceiving
 		call.status = FINISHED
 		call.mu.Unlock()
 		call.done()
-	case <-call.Done:
+	case <-call.Done: // call完成
 	}
 }
 
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.IsClosed() {
+	if c.isClosed() {
+		c.mu.Unlock()
 		return nil
 	}
 	c.terminateCalls()
-	return c.doClose()
-}
-
-func (c *Client) doClose() error {
+	cc := c.cc
 	c.pending = nil
-	if c.cc == nil {
+	c.closed = true
+	c.mu.Unlock()
+	if cc == nil {
 		return nil
 	}
-	return c.cc.Close()
+	return cc.Close()
 }
 
 // must hold mu
+func (c *Client) isClosed() bool {
+	return c.closed
+}
+
 func (c *Client) IsClosed() bool {
-	return c.pending == nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.isClosed()
 }
 
 func (c *Client) registerCall(call *Call) (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.IsClosed() {
+	if c.isClosed() {
 		return 0, ErrShutdown
 	}
 	call.Seq = c.seq
@@ -114,11 +115,13 @@ func (c *Client) registerCall(call *Call) (uint64, error) {
 func (c *Client) removeCall(seq uint64) *Call {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.IsClosed() {
+	if c.pending == nil {
 		return nil
 	}
-	call := c.pending[seq]
-	delete(c.pending, seq)
+	call, ok := c.pending[seq]
+	if ok {
+		delete(c.pending, seq)
+	}
 	return call
 }
 
@@ -127,21 +130,11 @@ func (c *Client) removeCall(seq uint64) *Call {
 func (c *Client) terminateCalls() {
 	for _, call := range c.pending {
 		call.mu.Lock()
-		if call.status == FINISHED {
-			call.mu.Unlock()
-			continue
-		} else if call.status == RECEIVING {
-			call.Error = ErrWaitingForReceiving
-		} else {
-			call.Error = ErrShutdown
-		}
+		call.Error = ErrWaitingForReceiving
 		call.status = FINISHED
 		call.mu.Unlock()
 		call.done()
-
 	}
-	// 清空pending
-	c.pending = make(map[uint64]*Call)
 }
 
 func (c *Client) receive() {
@@ -157,13 +150,10 @@ func (c *Client) receive() {
 			break
 		}
 		call := c.removeCall(resp.Seq)
-		// 确保call未失效
+		// 确保call未完成
 		if call != nil {
 			call.mu.Lock()
-			if call.status == FINISHED {
-				call.mu.Unlock()
-				return
-			} else if call.status != RECEIVING {
+			if call.status != RECEIVING {
 				call.mu.Unlock()
 				// call.status must be receiving or finished
 				panic("rpc client: internal logical error")
@@ -180,15 +170,12 @@ func (c *Client) receive() {
 			call.done()
 		}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.terminateCalls()
+
+	// 接收通道损坏，关闭客户端
+	closeCloseable(c)
 }
 
 func (c *Client) send(call *Call) {
-	c.sending.Lock()
-	defer c.sending.Unlock()
-
 	seq, err := c.registerCall(call)
 	if err != nil {
 		call.mu.Lock()
@@ -198,6 +185,10 @@ func (c *Client) send(call *Call) {
 		call.done()
 		return
 	}
+
+	c.sending.Lock()
+	defer c.sending.Unlock()
+
 	// 传递之前将参数解引用
 	var argd []interface{}
 	for _, arg := range call.Args {
@@ -211,7 +202,9 @@ func (c *Client) send(call *Call) {
 	}
 
 	req := codec.Request{Seq: seq, Argv: argd, TargetMethod: call.TargetMethod}
+
 	call.mu.Lock()
+	// 改变状态前确认请求未完成
 	if call.status == FINISHED {
 		call.mu.Unlock()
 		return
@@ -225,15 +218,14 @@ func (c *Client) send(call *Call) {
 		if call != nil {
 			log.Printf("rpc client: sending error %s", err)
 			call.mu.Lock()
-			if call.status == FINISHED {
-				call.mu.Unlock()
-				return
-			}
 			call.Error = ErrShutdown
 			call.status = FINISHED
 			call.mu.Unlock()
 			call.done()
 		}
+
+		// 发送通道损坏，关闭客户端
+		closeCloseable(c)
 	}
 }
 
@@ -285,7 +277,7 @@ func (c *Client) negotiate(conn net.Conn, option *protocol.Option) error {
 	}
 
 	c.mu.Lock()
-	if !c.IsClosed() {
+	if !c.isClosed() {
 		cc := codec.NewGobCodec(conn)
 		c.cc = cc
 	}
@@ -337,6 +329,7 @@ func (c *Client) dailTimeout(addr string, timeOut time.Duration, option *protoco
 		return ErrTimeOut
 	case err := <-finish:
 		if err != nil {
+			// 建立连接或协商错误，关闭客户端
 			closeCloseable(c)
 		}
 		return err
@@ -348,7 +341,7 @@ func (c *Client) ticker(tick int64) {
 		err := c.cc.WriteRequest(&codec.Request{})
 		if err != nil {
 			log.Printf("rpc client: tick failed [%s], close connection", err)
-			// 关闭连接
+			// 心跳失败，关闭客户端
 			closeCloseable(c)
 			return
 		}
@@ -363,9 +356,9 @@ func closeCloseable(closeable io.Closer) {
 	}
 }
 
-func NewClientTimeOut(addr string, timeOut time.Duration, option ...*protocol.Option) (*Client, error) {
+func NewClientTimeOut(addr string, timeOut time.Duration, option *protocol.Option) (*Client, error) {
 	c := &Client{pending: make(map[uint64]*Call)}
-	op := parseOption(option...)
+	op := parseOption(option)
 	if err := c.dailTimeout(addr, timeOut, op); err != nil {
 		return nil, err
 	}
@@ -373,9 +366,19 @@ func NewClientTimeOut(addr string, timeOut time.Duration, option ...*protocol.Op
 	return c, nil
 }
 
-func parseOption(option ...*protocol.Option) *protocol.Option {
-	if len(option) != 1 || option[0] == nil {
+func NewClient(addr string, option *protocol.Option) (*Client, error) {
+	c := &Client{pending: make(map[uint64]*Call)}
+	op := parseOption(option)
+	if err := c.dail(addr, op); err != nil {
+		return nil, err
+	}
+	go c.receive()
+	return c, nil
+}
+
+func parseOption(option *protocol.Option) *protocol.Option {
+	if option == nil {
 		return protocol.DefaultOption
 	}
-	return option[0]
+	return option
 }

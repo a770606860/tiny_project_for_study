@@ -37,7 +37,7 @@ func (s *Server) service(req *codec.Request, resp *codec.Response) (err error) {
 	name := strings.Split(req.TargetMethod, ":")
 	defer func() {
 		if err != nil {
-			resp.Err = fmt.Errorf("service/method not found").Error()
+			resp.Err = err.Error()
 		}
 	}()
 	if len(name) != 2 || len(name[0]) == 0 || len(name[1]) == 0 {
@@ -99,6 +99,7 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 	switch opt.CodecType {
 	case codec.GobType:
 		c = codec.NewGobCodec(conn)
+		// 心跳暂时固定为2s每次
 		tick = 2
 	default:
 		log.Println("rpc server: unsupported codec type")
@@ -110,10 +111,11 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		closeCloseable(conn)
 		return
 	}
+
 	// 心跳检测
 	var ch chan struct{}
 	if tick != 0 {
-		ch = make(chan struct{}, 10)
+		ch = make(chan struct{}, 1)
 		defer close(ch)
 		go heartListen(tick, ch, c)
 	}
@@ -139,10 +141,14 @@ func heartListen(tick int64, ch chan struct{}, c codec.Codec) {
 	}
 }
 
+// 同步处理单个客户端的所有请求，将结果收集到一个resultCh，串行发送结果
 func (s *Server) serveCodec(c codec.Codec, tick chan struct{}) {
 	var wg sync.WaitGroup
+	// 收集处理结果
 	resultCh := make(chan *codec.Response, 10)
+	// 在单独的goroutine中串行发送处理结果，通道关闭，则该goroutine被释放
 	go s.sendResponse(c, resultCh)
+	defer close(resultCh)
 loop:
 	for {
 		// 写损坏，停止处理
@@ -158,18 +164,22 @@ loop:
 		}
 		// 当targetMethod为nil时，为心跳包
 		if req.TargetMethod == "" && tick != nil {
-			tick <- struct{}{}
+			select {
+			case tick <- struct{}{}:
+			default:
+			}
 			continue
 		}
 
 		wg.Add(1)
 		go func() {
-			s.handleRequest(req, resultCh, err)
+			resp := s.handleRequest(req)
+			resultCh <- resp
 			wg.Done()
 		}()
 	}
+	// 等待所有请求处理完成
 	wg.Wait()
-	close(resultCh)
 	if cc, ok := c.GetConn().(net.Conn); ok {
 		log.Printf("rpc server: close connection [%s:%s]", cc.RemoteAddr(), cc.LocalAddr())
 	}
@@ -192,14 +202,10 @@ func (s *Server) readRequest(c codec.Codec) (*codec.Request, error) {
 }
 
 // 超时处理，每个方法执行时间不得超过700ms，如果超过，则返回处理超时错误
-func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response, err error) {
+func (s *Server) handleRequest(req *codec.Request) *codec.Response {
 	var resp codec.Response
 	resp.Seq = req.Seq
-	if err != nil {
-		resp.Err = err.Error()
-		return
-	}
-
+	var err error
 	finished := make(chan struct{})
 	go func() {
 		err = s.service(req, &resp)
@@ -218,7 +224,7 @@ func (s *Server) handleRequest(req *codec.Request, ch chan *codec.Response, err 
 	if err != nil {
 		resp.Err = err.Error()
 	}
-	ch <- &resp
+	return &resp
 }
 
 func (s *Server) sendResponse(c codec.Codec, ch chan *codec.Response) {

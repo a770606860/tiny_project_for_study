@@ -61,7 +61,7 @@ func Test_Main(t *testing.T) {
 	// 启动客户端和服务器
 	addr := make(chan string)
 	go startServer(addr)
-	c, err := NewClientTimeOut(<-addr, time.Second)
+	c, err := NewClient(<-addr, nil)
 	if err != nil {
 		log.Fatal("New client error: ", err)
 	}
@@ -92,17 +92,18 @@ func Test_Timeout(t *testing.T) {
 	addr := make(chan string)
 	go startServer(addr)
 	ad := <-addr
-	c, err := NewClientTimeOut(ad, 400*time.Millisecond)
+	c, err := NewClientTimeOut(ad, 400*time.Millisecond, nil)
 	assert.Nil(t, err)
 	if err != nil {
 		log.Println(err)
 	} else {
-		c.Close()
+		err = c.Close()
+		assert.Nil(t, err)
 	}
-	c, err = NewClientTimeOut(ad, time.Microsecond)
+	c, err = NewClientTimeOut(ad, time.Microsecond, nil)
 	assert.Equal(t, ErrTimeOut, err)
 
-	c, err = NewClientTimeOut(ad, 1*time.Second)
+	c, err = NewClientTimeOut(ad, 1*time.Second, nil)
 	if err != nil {
 		log.Println(err)
 	}
