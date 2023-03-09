@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var serv *server.Server
+var serv00 *server.Server
 
 type StudentService struct {
 	name     string
@@ -47,13 +47,13 @@ func startServer(addr chan string) {
 	}
 	log.Println("start rpc server on ", l.Addr().String())
 	addr <- l.Addr().String()
-	serv = server.NewServer()
+	serv00 = server.NewServer()
 	for {
 		conn, err = l.Accept()
 		if err != nil {
 			log.Fatal(err)
 		}
-		serv.ServeConn(conn)
+		serv00.ServeConn(conn)
 	}
 }
 
@@ -72,7 +72,7 @@ func Test_Main(t *testing.T) {
 	assert.NotNil(t, call1.Error)
 
 	// 注册服务
-	err = serv.Register(&StudentService{})
+	err = serv00.Register(&StudentService{})
 	assert.Nil(t, err)
 	var str string
 	err = c.Call("StudentService:SetName", nil, "weiwei")

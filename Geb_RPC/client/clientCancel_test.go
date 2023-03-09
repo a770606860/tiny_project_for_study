@@ -29,7 +29,7 @@ func Test_Cancel(t *testing.T) {
 	}
 
 	// 注册服务
-	err = serv.Register(&ServiceSlow{})
+	err = serv00.Register(&ServiceSlow{})
 	assert.Nil(t, err)
 	err = c.Call("ServiceSlow:SetName", nil, "weiwei")
 	assert.Nil(t, err)

@@ -193,9 +193,7 @@ func (s *Server) readRequest(c codec.Codec) (*codec.Request, error) {
 	// Gob编解器码需要注册类型；
 	// Json解码器需要将Request拆开为head, body进行发送，从head获取类型信息后再利用这些信息解码body；
 	err := c.ReadRequest(&r)
-	if err == nil {
-		log.Printf("rpc server: data recived Seq=%d", r.Seq)
-	} else if err != io.EOF {
+	if err != nil && err != io.EOF {
 		log.Printf("rpc server: recive data Seq=%d error %s", r.Seq, err)
 	}
 	return &r, err
@@ -234,8 +232,6 @@ func (s *Server) sendResponse(c codec.Codec, ch chan *codec.Response) {
 			log.Printf("rpc server: send error Seq=%d %s", r.Seq, err)
 			closeCloseable(c)
 			break
-		} else {
-			log.Printf("rpc server: data sended Seq=%d", r.Seq)
 		}
 	}
 	drain(ch) // 清空通道，防止死锁

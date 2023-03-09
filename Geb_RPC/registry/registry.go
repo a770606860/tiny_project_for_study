@@ -1,5 +1,6 @@
 package registry
 
+type _addr = string
 type _IPv4 = string
 type _name = string
 type _id = int

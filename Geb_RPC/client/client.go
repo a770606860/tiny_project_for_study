@@ -22,7 +22,7 @@ type Call struct {
 	Reply        interface{}   // 返回数据的指针
 	Error        error         // 错误，例如方法不存在，连接错误等
 	Done         chan struct{} // 通知调用方调用完成，当Done被关闭时表明完成
-	c            *Client
+	c            *DefaultClient
 	mu           sync.Mutex
 	status       int
 }
@@ -38,13 +38,16 @@ var ErrTimeOut = errors.New("connect or negotiate server time out")
 var ErrWaitingForReceiving = errors.New("call canceled while sending or waiting-for-receiving")
 var ErrShutdown = errors.New("connection is shut down and call didn't send")
 
-func (call *Call) done() {
-	close(call.Done)
+type Client interface {
+	io.Closer
+	Go(targetMethod string, result interface{}, args ...interface{}) *Call
+	Call(targetMethod string, result interface{}, args ...interface{}) error
+	CallUntil(duration time.Duration, targetMethod string, result interface{}, args ...interface{}) error
 }
 
 // TODO：后续可以尝试添加单向关闭功能
 // 不变式：pending中保存的call都处于RECEIVING，等待处理结果状态
-type Client struct {
+type DefaultClient struct {
 	sending sync.Mutex // 发送锁，因为只有一个连接因此串行发送操作
 	mu      sync.Mutex // mu保护下面所有的字段
 	cc      codec.Codec
@@ -53,7 +56,11 @@ type Client struct {
 	closed  bool
 }
 
-var _ io.Closer = (*Client)(nil)
+var _ io.Closer = (*DefaultClient)(nil)
+
+func (call *Call) done() {
+	close(call.Done)
+}
 
 // 等待指定时间后返回，如果call未完成则关闭call
 func (call *Call) WaitFor(duration time.Duration) {
@@ -72,7 +79,7 @@ func (call *Call) WaitFor(duration time.Duration) {
 	}
 }
 
-func (c *Client) Close() error {
+func (c *DefaultClient) Close() error {
 	c.mu.Lock()
 	if c.isClosed() {
 		c.mu.Unlock()
@@ -90,17 +97,17 @@ func (c *Client) Close() error {
 }
 
 // must hold mu
-func (c *Client) isClosed() bool {
+func (c *DefaultClient) isClosed() bool {
 	return c.closed
 }
 
-func (c *Client) IsClosed() bool {
+func (c *DefaultClient) IsClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.isClosed()
 }
 
-func (c *Client) registerCall(call *Call) (uint64, error) {
+func (c *DefaultClient) registerCall(call *Call) (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.isClosed() {
@@ -112,7 +119,7 @@ func (c *Client) registerCall(call *Call) (uint64, error) {
 	return call.Seq, nil
 }
 
-func (c *Client) removeCall(seq uint64) *Call {
+func (c *DefaultClient) removeCall(seq uint64) *Call {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.pending == nil {
@@ -127,7 +134,7 @@ func (c *Client) removeCall(seq uint64) *Call {
 
 // must hold mu before call this func
 // assert c.isClosed() false
-func (c *Client) terminateCalls() {
+func (c *DefaultClient) terminateCalls() {
 	for _, call := range c.pending {
 		call.mu.Lock()
 		call.Error = ErrWaitingForReceiving
@@ -137,7 +144,7 @@ func (c *Client) terminateCalls() {
 	}
 }
 
-func (c *Client) receive() {
+func (c *DefaultClient) receive() {
 	var err error
 	for err == nil {
 		var resp codec.Response
@@ -175,7 +182,7 @@ func (c *Client) receive() {
 	closeCloseable(c)
 }
 
-func (c *Client) send(call *Call) {
+func (c *DefaultClient) send(call *Call) {
 	seq, err := c.registerCall(call)
 	if err != nil {
 		call.mu.Lock()
@@ -230,7 +237,7 @@ func (c *Client) send(call *Call) {
 }
 
 // result must be a pointer
-func (c *Client) Go(targetMethod string, result interface{}, args ...interface{}) *Call {
+func (c *DefaultClient) Go(targetMethod string, result interface{}, args ...interface{}) *Call {
 	if result != nil && reflect.ValueOf(result).Kind() != reflect.Ptr {
 		panic("rpc client: result must be a pointer")
 	}
@@ -246,19 +253,19 @@ func (c *Client) Go(targetMethod string, result interface{}, args ...interface{}
 	return call
 }
 
-func (c *Client) Call(targetMethod string, result interface{}, args ...interface{}) error {
+func (c *DefaultClient) Call(targetMethod string, result interface{}, args ...interface{}) error {
 	call := c.Go(targetMethod, result, args...)
 	<-call.Done
 	return call.Error
 }
 
-func (c *Client) CallUntil(duration time.Duration, targetMethod string, result interface{}, args ...interface{}) error {
+func (c *DefaultClient) CallUntil(duration time.Duration, targetMethod string, result interface{}, args ...interface{}) error {
 	call := c.Go(targetMethod, result, args...)
 	call.WaitFor(duration)
 	return call.Error
 }
 
-func (c *Client) negotiate(conn net.Conn, option *protocol.Option) error {
+func (c *DefaultClient) negotiate(conn net.Conn, option *protocol.Option) error {
 	err := json.NewEncoder(conn).Encode(option)
 	log.Println("rpc client: option sent")
 	if err != nil {
@@ -289,7 +296,7 @@ func (c *Client) negotiate(conn net.Conn, option *protocol.Option) error {
 	return nil
 }
 
-func (c *Client) dail(addr string, option *protocol.Option) error {
+func (c *DefaultClient) dail(addr string, option *protocol.Option) error {
 	conn, err := net.Dial("tcp", addr)
 	if err == nil {
 		log.Printf("rpc client: connection established, negociating")
@@ -303,7 +310,7 @@ func (c *Client) dail(addr string, option *protocol.Option) error {
 	return err
 }
 
-func (c *Client) dailTimeout(addr string, timeOut time.Duration, option *protocol.Option) error {
+func (c *DefaultClient) dailTimeout(addr string, timeOut time.Duration, option *protocol.Option) error {
 	finish := make(chan error, 1)
 	connCh := make(chan net.Conn, 1)
 	go func() {
@@ -336,7 +343,7 @@ func (c *Client) dailTimeout(addr string, timeOut time.Duration, option *protoco
 	}
 }
 
-func (c *Client) ticker(tick int64) {
+func (c *DefaultClient) ticker(tick int64) {
 	for {
 		err := c.cc.WriteRequest(&codec.Request{})
 		if err != nil {
@@ -356,8 +363,8 @@ func closeCloseable(closeable io.Closer) {
 	}
 }
 
-func NewClientTimeOut(addr string, timeOut time.Duration, option *protocol.Option) (*Client, error) {
-	c := &Client{pending: make(map[uint64]*Call)}
+func NewClientTimeOut(addr string, timeOut time.Duration, option *protocol.Option) (Client, error) {
+	c := &DefaultClient{pending: make(map[uint64]*Call)}
 	op := parseOption(option)
 	if err := c.dailTimeout(addr, timeOut, op); err != nil {
 		return nil, err
@@ -366,8 +373,8 @@ func NewClientTimeOut(addr string, timeOut time.Duration, option *protocol.Optio
 	return c, nil
 }
 
-func NewClient(addr string, option *protocol.Option) (*Client, error) {
-	c := &Client{pending: make(map[uint64]*Call)}
+func NewClient(addr string, option *protocol.Option) (Client, error) {
+	c := &DefaultClient{pending: make(map[uint64]*Call)}
 	op := parseOption(option)
 	if err := c.dail(addr, op); err != nil {
 		return nil, err

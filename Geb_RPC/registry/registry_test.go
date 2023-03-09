@@ -108,7 +108,7 @@ func TestGetServices(t *testing.T) {
 
 	// 更改c4的id为不存在的id，模拟心跳失败
 	c4.mu.Lock()
-	c4.id = 1001
+	c4.Id = 1001
 	c4.mu.Unlock()
 	time.Sleep(5 * time.Second)
 	ser, _ = c1.GetServiceAdders("serv2")
@@ -116,7 +116,7 @@ func TestGetServices(t *testing.T) {
 
 	ser, _ = c3.GetServiceAdders("serv1")
 	assert.Equal(t, 1, len(ser))
-	se.printInfo()
+	se.PrintInfo()
 
 	err = se.Close()
 	assert.Nil(t, err)

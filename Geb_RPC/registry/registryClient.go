@@ -19,9 +19,9 @@ type RegisterClient struct {
 	ServerAddr _IPv4
 
 	// 自身服务名地址与ID
-	name _name
-	id   _id
-	addr _IPv4
+	Name _name
+	Id   _id
+	Addr _addr
 
 	tick time.Duration
 
@@ -32,20 +32,20 @@ type RegisterClient struct {
 
 	// 服务及其地址
 	mu       sync.Mutex
-	services map[_name][]_IPv4
+	services map[_name][]_addr
 	closed   bool
 }
 
 type Updates struct {
 	name  _name
-	addrs []_IPv4
+	addrs []_addr
 }
 
 var ErrClosed = errors.New("client already closed")
 
 func (reg *RegisterClient) GetServiceAdders(name string) ([]string, error) {
 	if len(name) == 0 {
-		return nil, errors.New("name must not empty")
+		return nil, errors.New("Name must not empty")
 	}
 	reg.mu.Lock()
 	if reg.closed {
@@ -66,7 +66,7 @@ func (reg *RegisterClient) GetServiceAdders(name string) ([]string, error) {
 
 func (reg *RegisterClient) GetServiceAddrsForce(name string) ([]string, error) {
 	if len(name) == 0 {
-		return nil, errors.New("name must not empty")
+		return nil, errors.New("Name must not empty")
 	}
 	addrs, err := reg.getAddrsHTTP(name)
 	if err != nil {
@@ -136,7 +136,7 @@ func (reg *RegisterClient) Close() error {
 	// TODO 赋空字段
 }
 
-func (reg *RegisterClient) update(name _name, addrs []_IPv4) {
+func (reg *RegisterClient) update(name _name, addrs []_addr) {
 	reg.mu.Lock()
 	if len(addrs) == 0 {
 		delete(reg.services, name)
@@ -164,7 +164,7 @@ func (reg *RegisterClient) heartBeat() {
 		go func() {
 			err := reg.heartBeatHTTP()
 			if err != nil {
-				// log.Printf("rpc registry: heartbeat id=%d error %v", reg.id, err)
+				// log.Printf("rpc registry: heartbeat Id=%d error %v", reg.Id, err)
 			}
 		}()
 	}
@@ -191,14 +191,14 @@ func (reg *RegisterClient) HandleUpdate(writer http.ResponseWriter, request *htt
 	writer.WriteHeader(http.StatusOK)
 }
 
-func (reg *RegisterClient) getAddrsHTTP(name _name) ([]_IPv4, error) {
+func (reg *RegisterClient) getAddrsHTTP(name _name) ([]string, error) {
 	url := getHttpURL(reg.ServerAddr, "/services")
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("name", name)
-	req.Header.Set("id", strconv.Itoa(reg.id))
+	req.Header.Set("id", strconv.Itoa(reg.Id))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -218,7 +218,7 @@ func (reg *RegisterClient) getAddrsHTTP(name _name) ([]_IPv4, error) {
 // 注册名为name的服务，并定期向服务端发送心跳，注册中心在三倍心跳期内未接收到心跳则移除该服务
 // 如果update为true将会启动一个监听地址监听服务端更新
 // 如果发生错误，那么需要关闭
-func (reg *RegisterClient) registerHTTP(name, addr string, tick time.Duration, update bool) error {
+func (reg *RegisterClient) registerHTTP(name _name, addr _addr, tick time.Duration, update bool) error {
 	url := getHttpURL(reg.ServerAddr, "/register")
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -240,9 +240,9 @@ func (reg *RegisterClient) registerHTTP(name, addr string, tick time.Duration, u
 	// 获取自身ID
 	id, err := strconv.Atoi(resp.Header.Get("id"))
 	if err != nil || id <= 0 {
-		return errors.New("error no id")
+		return errors.New("error no Id")
 	}
-	reg.id = id
+	reg.Id = id
 	return nil
 }
 
@@ -253,7 +253,7 @@ func (reg *RegisterClient) resignHTTP() error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("id", strconv.Itoa(reg.id))
+	req.Header.Set("id", strconv.Itoa(reg.Id))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -270,7 +270,7 @@ func (reg *RegisterClient) heartBeatHTTP() error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("id", strconv.Itoa(reg.id))
+	req.Header.Set("id", strconv.Itoa(reg.Id))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -282,8 +282,8 @@ func (reg *RegisterClient) heartBeatHTTP() error {
 }
 
 func NewClient(name, addr, serverAddr string, tick time.Duration) (*RegisterClient, error) {
-	c := &RegisterClient{name: name, addr: addr, ServerAddr: serverAddr, tick: tick}
-	c.services = make(map[_name][]_IPv4)
+	c := &RegisterClient{Name: name, Addr: addr, ServerAddr: serverAddr, tick: tick}
+	c.services = make(map[_name][]_addr)
 	err := c.register(name, addr, tick, true)
 	if err != nil {
 		return nil, err
