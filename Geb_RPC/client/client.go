@@ -345,7 +345,9 @@ func (c *DefaultClient) dailTimeout(addr string, timeOut time.Duration, option *
 
 func (c *DefaultClient) ticker(tick int64) {
 	for {
+		c.sending.Lock()
 		err := c.cc.WriteRequest(&codec.Request{})
+		c.sending.Unlock()
 		if err != nil {
 			log.Printf("rpc client: tick failed [%s], close connection", err)
 			// 心跳失败，关闭客户端
