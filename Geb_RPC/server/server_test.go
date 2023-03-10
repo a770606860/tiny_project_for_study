@@ -13,13 +13,18 @@ import (
 
 type ServiceVerySlow struct {
 	name string
+	mu   sync.Mutex
 }
 
 func (s *ServiceVerySlow) SetName(name string) {
 	time.Sleep(time.Second)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.name = name
 }
 func (s *ServiceVerySlow) GetName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.name
 }
 

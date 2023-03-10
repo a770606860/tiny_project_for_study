@@ -15,13 +15,14 @@ import (
 
 // 和注册中心的通信使用http协议，JSON编码
 type RegisterClient struct {
+	mu sync.Mutex
 	// 注册中心地址，IPv4地址
-	ServerAddr _IPv4
+	serverAddr _IPv4
 
 	// 自身服务名地址与ID
-	Name _name
-	Id   _id
-	Addr _addr
+	name _name
+	id   _id
+	addr _addr
 
 	tick time.Duration
 
@@ -31,9 +32,86 @@ type RegisterClient struct {
 	ch    chan Updates
 
 	// 服务及其地址
-	mu       sync.Mutex
 	services map[_name][]_addr
 	closed   bool
+}
+
+func (reg *RegisterClient) SetName(name string) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	reg.name = name
+}
+
+func (reg *RegisterClient) Id() int {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.id
+}
+
+func (reg *RegisterClient) SetId(id int) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	reg.id = id
+}
+
+func (reg *RegisterClient) Addr() string {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.addr
+}
+
+func (reg *RegisterClient) SetAddr(addr string) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	reg.addr = addr
+}
+
+func (reg *RegisterClient) Tick() time.Duration {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.tick
+}
+
+func (reg *RegisterClient) SetTick(tick time.Duration) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	reg.tick = tick
+}
+
+func (reg *RegisterClient) LAddr() string {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.lAddr
+}
+
+func (reg *RegisterClient) SetLAddr(lAddr string) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	reg.lAddr = lAddr
+}
+
+func (reg *RegisterClient) L() net.Listener {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.l
+}
+
+func (reg *RegisterClient) SetL(l net.Listener) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	reg.l = l
+}
+
+func (reg *RegisterClient) ServerAddr() string {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.serverAddr
+}
+
+func (reg *RegisterClient) Name() string {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	return reg.name
 }
 
 type Updates struct {
@@ -87,8 +165,8 @@ func (reg *RegisterClient) register(name, addr string, tick time.Duration, updat
 		if err != nil {
 			return err
 		}
-		reg.lAddr = l.Addr().String()
-		reg.l = l
+		reg.SetLAddr(l.Addr().String())
+		reg.SetL(l)
 		reg.ch = make(chan Updates, 10)
 		// 启动监听服务
 		go func() {
@@ -100,13 +178,15 @@ func (reg *RegisterClient) register(name, addr string, tick time.Duration, updat
 	}
 	if err := reg.registerHTTP(name, addr, tick, update); err != nil {
 		if update {
-			if err := reg.l.Close(); err != nil {
-				log.Printf("rpc registry: stop lAddr %s error %v", reg.lAddr, err)
+			if err := reg.L().Close(); err != nil {
+				log.Printf("rpc registry: stop lAddr %s error %v", reg.LAddr(), err)
 			}
 			close(reg.ch)
+			reg.mu.Lock()
 			reg.l = nil
 			reg.ch = nil
 			reg.lAddr = ""
+			reg.mu.Unlock()
 		}
 		return err
 	}
@@ -127,7 +207,7 @@ func (reg *RegisterClient) Close() error {
 	reg.mu.Unlock()
 	close(reg.ch)
 	err := reg.resign()
-	if reg.l != nil {
+	if reg.L() != nil {
 		if err := reg.l.Close(); err != nil {
 			log.Printf("rpc registry: close lAddr error %v", err)
 		}
@@ -154,7 +234,7 @@ func (reg *RegisterClient) doUpdate() {
 
 func (reg *RegisterClient) heartBeat() {
 	for {
-		time.Sleep(reg.tick)
+		time.Sleep(reg.Tick())
 		reg.mu.Lock()
 		if reg.closed {
 			reg.mu.Unlock()
@@ -192,13 +272,13 @@ func (reg *RegisterClient) HandleUpdate(writer http.ResponseWriter, request *htt
 }
 
 func (reg *RegisterClient) getAddrsHTTP(name _name) ([]string, error) {
-	url := getHttpURL(reg.ServerAddr, "/services")
+	url := getHttpURL(reg.ServerAddr(), "/services")
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("name", name)
-	req.Header.Set("id", strconv.Itoa(reg.Id))
+	req.Header.Set("id", strconv.Itoa(reg.Id()))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -219,7 +299,7 @@ func (reg *RegisterClient) getAddrsHTTP(name _name) ([]string, error) {
 // 如果update为true将会启动一个监听地址监听服务端更新
 // 如果发生错误，那么需要关闭
 func (reg *RegisterClient) registerHTTP(name _name, addr _addr, tick time.Duration, update bool) error {
-	url := getHttpURL(reg.ServerAddr, "/register")
+	url := getHttpURL(reg.ServerAddr(), "/register")
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
@@ -228,7 +308,7 @@ func (reg *RegisterClient) registerHTTP(name _name, addr _addr, tick time.Durati
 	req.Header.Set("addr", addr)
 	req.Header.Set("tick", strconv.Itoa(int(tick.Seconds())))
 	if update {
-		req.Header.Set("lAddr", reg.lAddr)
+		req.Header.Set("lAddr", reg.LAddr())
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -242,18 +322,18 @@ func (reg *RegisterClient) registerHTTP(name _name, addr _addr, tick time.Durati
 	if err != nil || id <= 0 {
 		return errors.New("error no Id")
 	}
-	reg.Id = id
+	reg.SetId(id)
 	return nil
 }
 
 // 注销
 func (reg *RegisterClient) resignHTTP() error {
-	url := getHttpURL(reg.ServerAddr, "/resign")
+	url := getHttpURL(reg.ServerAddr(), "/resign")
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("id", strconv.Itoa(reg.Id))
+	req.Header.Set("id", strconv.Itoa(reg.Id()))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -265,12 +345,12 @@ func (reg *RegisterClient) resignHTTP() error {
 }
 
 func (reg *RegisterClient) heartBeatHTTP() error {
-	url := getHttpURL(reg.ServerAddr, "/heartbeat")
+	url := getHttpURL(reg.ServerAddr(), "/heartbeat")
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("id", strconv.Itoa(reg.Id))
+	req.Header.Set("id", strconv.Itoa(reg.Id()))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -282,7 +362,7 @@ func (reg *RegisterClient) heartBeatHTTP() error {
 }
 
 func NewClient(name, addr, serverAddr string, tick time.Duration) (*RegisterClient, error) {
-	c := &RegisterClient{Name: name, Addr: addr, ServerAddr: serverAddr, tick: tick}
+	c := &RegisterClient{name: name, addr: addr, serverAddr: serverAddr, tick: tick}
 	c.services = make(map[_name][]_addr)
 	err := c.register(name, addr, tick, true)
 	if err != nil {

@@ -18,12 +18,10 @@ type BalancedClient struct {
 	// 注册中心，用以获取服务列表
 	registry *registry.RegisterClient
 
+	mu sync.Mutex
 	// 负载均衡策略：随机选取
-	rand *rand.Rand
-
-	option *protocol.Option
-
-	mu      sync.Mutex
+	rand    *rand.Rand
+	option  *protocol.Option
 	clients map[string]*CClient // 服务
 	closed  bool
 }
@@ -48,9 +46,9 @@ func (c *CClient) Close() error {
 }
 
 func (b *BalancedClient) Close() error {
-	mu.Lock()
+	b.mu.Lock()
 	if b.closed {
-		mu.Unlock()
+		b.mu.Unlock()
 		return nil
 	}
 	b.closed = true
@@ -59,7 +57,7 @@ func (b *BalancedClient) Close() error {
 	b.registry = nil
 	b.clients = nil
 	b.rand = nil
-	mu.Unlock()
+	b.mu.Unlock()
 	// 关闭资源
 	closeCloseable(reg)
 	for _, v := range cli {
@@ -126,7 +124,10 @@ func (b *BalancedClient) Go(targetMethod string, result interface{}, args ...int
 		c = &CClient{down: make(chan struct{})}
 		b.clients[addr] = c
 		go func() {
-			c.c, c.err = NewClient(addr, b.option)
+			b.mu.Lock()
+			option := b.option
+			b.mu.Unlock()
+			c.c, c.err = NewClient(addr, option)
 			// 如果建立错误，则移除该客户端
 			if c.err != nil {
 				b.mu.Lock()

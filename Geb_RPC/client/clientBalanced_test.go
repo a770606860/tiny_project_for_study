@@ -51,8 +51,9 @@ func TestBalancedClient_New(t *testing.T) {
 	assert.Nil(t, err)
 
 	c11 := c1.(*BalancedClient)
-	log.Printf(c11.registry.Name)
-
+	c11.mu.Lock()
+	log.Printf(c11.registry.Name())
+	c11.mu.Unlock()
 	ser1, addr1 := startServer2()
 	ser2, addr2 := startServer2()
 	ser3, addr3 := startServer2()
@@ -72,8 +73,9 @@ func TestBalancedClient_New(t *testing.T) {
 	assert.Nil(t, err)
 	se.PrintInfo()
 	time.Sleep(100 * time.Millisecond)
-
+	c11.mu.Lock()
 	sers, err := c11.registry.GetServiceAdders("DService")
+	c11.mu.Unlock()
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(sers))
 
@@ -81,7 +83,7 @@ func TestBalancedClient_New(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
-			err = c1.Call("DService:Increase", nil)
+			err := c1.Call("DService:Increase", nil)
 			assert.Nil(t, err)
 			wg.Done()
 		}()

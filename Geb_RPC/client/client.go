@@ -15,6 +15,7 @@ import (
 )
 
 // 内存可见性由Done通道维护
+// TODO 访问字段上锁
 type Call struct {
 	Seq          uint64        // 序列号
 	TargetMethod string        // <service>:<methodName>
@@ -45,7 +46,7 @@ type Client interface {
 	CallUntil(duration time.Duration, targetMethod string, result interface{}, args ...interface{}) error
 }
 
-// TODO：后续可以尝试添加单向关闭功能
+// TODO：添加单向关闭功能
 // 不变式：pending中保存的call都处于RECEIVING，等待处理结果状态
 type DefaultClient struct {
 	sending sync.Mutex // 发送锁，因为只有一个连接因此串行发送操作

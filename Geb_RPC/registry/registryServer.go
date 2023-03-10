@@ -12,7 +12,9 @@ import (
 	"time"
 )
 
+// TODO 访问字段时上锁
 type Service struct {
+	mu      sync.Mutex
 	name    _name         // 服务名
 	addr    _addr         // 服务地址
 	id      _id           // 服务唯一id
@@ -21,10 +23,69 @@ type Service struct {
 
 	lAddr _IPv4 // 服务监听地址，用于接收注册中心的通知，_IPv4
 
-	mu       sync.Mutex
 	closed   bool
 	reg      *RegisterServer
 	interest map[_name]struct{} // 该服务关心的服务集合
+}
+
+func (s *Service) LAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lAddr
+}
+
+func (s *Service) SetLAddr(lAddr _IPv4) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lAddr = lAddr
+}
+
+func (s *Service) Name() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.name
+}
+
+func (s *Service) SetName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.name = name
+}
+
+func (s *Service) Addr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.addr
+}
+
+func (s *Service) SetAddr(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addr = addr
+}
+
+func (s *Service) Tick() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tick
+}
+
+func (s *Service) SetTick(tick time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tick = tick
+}
+
+func (s *Service) Id() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.id
+}
+
+func (s *Service) SetId(id int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.id = id
 }
 
 func (s *Service) Close() error {
@@ -86,18 +147,19 @@ func (reg *RegisterServer) register(name _name, addr _addr, lAddr _IPv4, tick ti
 
 	reg.seMu.Lock()
 	reg.id = reg.id + 1
-	se.id = reg.id
+	id := reg.id
+	se.id = id
 	reg.services[name] = append(reg.services[name], &se)
-	reg.idToService[se.id] = &se
+	reg.idToService[id] = &se
 	reg.seMu.Unlock()
 	if len(lAddr) != 0 {
 		reg.clMu.Lock()
-		reg.clients[se.id] = &se
+		reg.clients[id] = &se
 		reg.clMu.Unlock()
 	}
 	// 推送更新
 	go reg.informChanges(&se)
-	log.Printf("rpc registry: Service %d registed", reg.id)
+	log.Printf("rpc registry: Service %d registed", id)
 	return &se, nil
 }
 
@@ -108,25 +170,29 @@ func (reg *RegisterServer) resign(id _id) {
 		reg.seMu.Unlock()
 		return
 	}
-	ses := reg.services[s.name]
+	s.mu.Lock()
+	name := s.name
+	sid := s.id
+	s.mu.Unlock()
+	ses := reg.services[name]
 	// 从列表中删除服务
-	delete(reg.idToService, s.id)
+	delete(reg.idToService, sid)
 	newSes := make([]*Service, 0, len(ses)-1)
 	for _, ss := range ses {
-		if ss.id == s.id {
+		if ss.Id() == id {
 			continue
 		}
 		newSes = append(newSes, ss)
 	}
 	if len(newSes) == 0 {
-		delete(reg.services, s.name)
+		delete(reg.services, name)
 	} else {
-		reg.services[s.name] = newSes
+		reg.services[name] = newSes
 	}
 	reg.seMu.Unlock()
-	if len(s.lAddr) != 0 {
+	if len(s.LAddr()) != 0 {
 		reg.clMu.Lock()
-		delete(reg.clients, s.id)
+		delete(reg.clients, s.Id())
 		reg.clMu.Unlock()
 	}
 	// 推送更新
@@ -134,9 +200,9 @@ func (reg *RegisterServer) resign(id _id) {
 	// 关闭服务
 	err := s.Close()
 	if err != nil {
-		log.Printf("rpc registry: close Service %d failed, %v", s.id, err)
+		log.Printf("rpc registry: close Service %d failed, %v", s.Id(), err)
 	}
-	log.Printf("rpc registry: Service %d removed", s.id)
+	log.Printf("rpc registry: Service %d removed", s.Id())
 }
 
 func (reg *RegisterServer) getServiceAddr(id _id, name _name) []_addr {
@@ -154,7 +220,7 @@ func (reg *RegisterServer) getServiceAddr(id _id, name _name) []_addr {
 
 	addrs := make([]_addr, 0, len(sers))
 	for _, s := range sers {
-		addrs = append(addrs, s.addr)
+		addrs = append(addrs, s.Addr())
 	}
 	reg.seMu.Unlock()
 
@@ -163,16 +229,17 @@ func (reg *RegisterServer) getServiceAddr(id _id, name _name) []_addr {
 
 func (reg *RegisterServer) issueAliveCheck(s *Service) error {
 	s.aliveCh = make(chan struct{}, 1)
-	tick := int(s.tick.Seconds() * 3)
-	if tick == 0 {
+	tick := s.Tick() * 3
+	if int(tick.Seconds()) == 0 {
 		return errors.New("tick time must bigger than 1s")
 	}
 	go func() {
 		for {
 			select {
-			case <-time.After(s.tick * 3):
-				log.Printf("rpc registry: tick failed, Service Id %d", s.id)
-				reg.resign(s.id)
+			case <-time.After(tick):
+				id := s.Id()
+				log.Printf("rpc registry: tick failed, Service Id %d", id)
+				reg.resign(id)
 				return
 			case _, ok := <-s.aliveCh:
 				if !ok {
@@ -187,10 +254,11 @@ func (reg *RegisterServer) issueAliveCheck(s *Service) error {
 
 func (reg *RegisterServer) informChanges(s *Service) {
 	var toBeInformed []*Service
+	name := s.Name()
 	reg.clMu.Lock()
 	for _, v := range reg.clients {
 		v.mu.Lock()
-		if _, ok := v.interest[s.name]; ok {
+		if _, ok := v.interest[name]; ok {
 			toBeInformed = append(toBeInformed, v)
 		}
 		v.mu.Unlock()
@@ -201,13 +269,13 @@ func (reg *RegisterServer) informChanges(s *Service) {
 	}
 	var updates []_addr
 	reg.seMu.Lock()
-	updates = make([]_addr, 0, len(reg.services[s.name]))
-	for _, ss := range reg.services[s.name] {
-		updates = append(updates, ss.addr)
+	updates = make([]_addr, 0, len(reg.services[s.Name()]))
+	for _, ss := range reg.services[name] {
+		updates = append(updates, ss.Addr())
 	}
 	reg.seMu.Unlock()
 	for _, ss := range toBeInformed {
-		go reg.sendUpDateHTTP(ss, s.name, updates)
+		go reg.sendUpDateHTTP(ss, name, updates)
 	}
 }
 
@@ -227,7 +295,7 @@ func (reg *RegisterServer) HandleRegister(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("id", strconv.Itoa(s.id))
+	w.Header().Set("id", strconv.Itoa(s.Id()))
 	return
 }
 
@@ -308,7 +376,7 @@ func (reg *RegisterServer) sendUpDateHTTP(s *Service, name _name, addrs []_addr)
 		log.Printf("rpc registry: send update error %v", err)
 		return
 	}
-	url := getHttpURL(s.lAddr, "/update")
+	url := getHttpURL(s.LAddr(), "/update")
 	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
 	if err != nil {
 		log.Printf("rpc registry: send update error %v", err)
@@ -353,13 +421,17 @@ func (reg *RegisterServer) PrintInfo() {
 	reg.seMu.Lock()
 	for _, v := range reg.services {
 		for _, s := range v {
+			s.mu.Lock()
 			log.Printf("%s Id=%v, Addr=%s, interest=%v", s.name, s.id, s.addr, s.interest)
+			s.mu.Unlock()
 		}
 	}
 	reg.seMu.Unlock()
 	reg.clMu.Lock()
 	for _, v := range reg.clients {
+		v.mu.Lock()
 		log.Printf("%s Id=%v, lAddr=%s", v.name, v.id, v.lAddr)
+		v.mu.Unlock()
 	}
 	reg.clMu.Unlock()
 }

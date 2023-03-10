@@ -3,19 +3,25 @@ package client
 import (
 	"github.com/stretchr/testify/assert"
 	"log"
+	"sync"
 	"testing"
 	"time"
 )
 
 type ServiceSlow struct {
 	name string
+	mu   sync.Mutex
 }
 
 func (s *ServiceSlow) SetName(name string) {
 	time.Sleep(400 * time.Millisecond)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.name = name
 }
 func (s *ServiceSlow) GetName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.name
 }
 
