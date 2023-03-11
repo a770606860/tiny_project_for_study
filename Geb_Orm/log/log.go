@@ -48,12 +48,15 @@ func Errorf(format string, any ...interface{}) {
 }
 
 func quoteString(vars []interface{}) []interface{} {
+	temp := make([]interface{}, len(vars))
 	for i, v := range vars {
-		if v, ok := v.(string); ok {
-			vars[i] = "\"" + v + "\""
+		if vv, ok := v.(string); ok {
+			temp[i] = "\"" + vv + "\""
+		} else {
+			temp[i] = v
 		}
 	}
-	return vars
+	return temp
 }
 
 const (

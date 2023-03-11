@@ -7,6 +7,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -130,48 +131,75 @@ func TestSession_Count(t *testing.T) {
 	assert.Equal(t, int64(1), c)
 }
 
+var mu sync.Mutex
 var bi, ai, bu, au, bq, aq, bd, ad int
 
-func (u *User) BeforeInsert(s *Session) {
+type HookUser struct {
+	Name string `geborm:"PRIMARY KEY"`
+	Age  int
+}
+
+func (u *HookUser) BeforeInsert(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	bi++
 }
-func (u *User) AfterInsert(s *Session) {
+func (u *HookUser) AfterInsert(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	ai++
 }
-func (u *User) BeforeUpdate(s *Session) {
+func (u *HookUser) BeforeUpdate(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	bu++
 }
-func (u *User) AfterUpdate(s *Session) {
+func (u *HookUser) AfterUpdate(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	au++
 }
-func (u *User) BeforeDelete(s *Session) {
+func (u *HookUser) BeforeDelete(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	bd++
 }
-func (u *User) AfterDelete(s *Session) {
+func (u *HookUser) AfterDelete(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	ad++
 }
-func (u *User) BeforeQuery(s *Session) {
+func (u *HookUser) BeforeQuery(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	bq++
 }
-func (u *User) AfterQuery(s *Session) {
+func (u *HookUser) AfterQuery(s *Session) {
+	mu.Lock()
+	defer mu.Unlock()
 	aq++
 }
 
 func Test_Hook(t *testing.T) {
 	// test insert hook
 	s := insertSomeData(t)
+	h1 := &HookUser{Name: "xiaobai", Age: 1}
+	h2 := &HookUser{Name: "xiaobao", Age: 2}
+	s.DropTable(h1)
+	s.CreateTable(h1)
+	_, err := s.Insert(h1, h2)
 	assert.Equal(t, 2, bi)
 	assert.Equal(t, 2, ai)
 
 	// test update hook
-	c, err := s.Where("Name = ?", "xiaobai").Update(&User{}, M{"Age": 2})
+	c, err := s.Where("Name = ?", "xiaobai").Update(&HookUser{}, M{"Age": 2})
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), c)
 	assert.Equal(t, 1, bu)
 	assert.Equal(t, 1, au)
 
 	// test query hook
-	u := User{}
+	u := HookUser{}
 	err = s.Where("Name = ?", "xiaobai").FindOne(&u)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, bq)
@@ -185,7 +213,7 @@ func Test_Hook(t *testing.T) {
 	assert.Equal(t, "", a.Name)
 
 	// test delete hook
-	c, err = s.Where("name = ?", "xiaobai").Delete(&User{})
+	c, err = s.Where("name = ?", "xiaobai").Delete(&HookUser{})
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), c)
 	c, err = s.Where("name = ?", "weiwei").Delete(&Admin{})
